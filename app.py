@@ -852,7 +852,7 @@ DEFAULT_CSV_DATA = [
     },
 ]
 
-# Cartelera Completa de 15 Partidos (Los 30 equipos NBA en acción)
+# Plantilla de cruces por defecto para inicializar selectores dinámicos (1 a 15 juegos)
 FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
     ("Detroit Pistons", "Boston Celtics"),
     ("New York Knicks", "Miami Heat"),
@@ -870,39 +870,6 @@ FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
     ("Charlotte Hornets", "Washington Wizards"),
     ("Portland Trail Blazers", "Utah Jazz"),
 ]
-
-DIVISION_MATCHUPS: Dict[str, List[Tuple[str, str]]] = {
-    "Atlántico": [
-        ("New York Knicks", "Boston Celtics"),
-        ("Philadelphia 76ers", "Brooklyn Nets"),
-        ("Toronto Raptors", "New York Knicks"),
-    ],
-    "Central": [
-        ("Milwaukee Bucks", "Cleveland Cavaliers"),
-        ("Indiana Pacers", "Chicago Bulls"),
-        ("Detroit Pistons", "Milwaukee Bucks"),
-    ],
-    "Noroeste": [
-        ("Denver Nuggets", "Oklahoma City Thunder"),
-        ("Minnesota Timberwolves", "Denver Nuggets"),
-        ("Portland Trail Blazers", "Utah Jazz"),
-    ],
-    "Pacífico": [
-        ("Golden State Warriors", "Los Angeles Lakers"),
-        ("Phoenix Suns", "LA Clippers"),
-        ("Sacramento Kings", "Golden State Warriors"),
-    ],
-    "Sureste": [
-        ("Miami Heat", "Orlando Magic"),
-        ("Atlanta Hawks", "Charlotte Hornets"),
-        ("Washington Wizards", "Miami Heat"),
-    ],
-    "Suroeste": [
-        ("Houston Rockets", "Dallas Mavericks"),
-        ("Memphis Grizzlies", "New Orleans Pelicans"),
-        ("San Antonio Spurs", "Houston Rockets"),
-    ],
-}
 
 
 # ==============================================================================
@@ -1458,6 +1425,27 @@ def inject_cyber_quant_css() -> None:
             font-size: 0.96rem;
         }
 
+        /* Estilo para el formulario dinámico de cartelera */
+        div[data-testid="stExpander"] {
+            background: rgba(11, 18, 35, 0.82);
+            border: 1px solid rgba(0, 245, 212, 0.25);
+            border-radius: 14px;
+            margin-bottom: 18px;
+        }
+
+        .slate-slot-badge {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.74rem;
+            font-weight: 800;
+            color: #00F5D4;
+            background: rgba(0, 245, 212, 0.10);
+            border: 1px solid rgba(0, 245, 212, 0.28);
+            border-radius: 6px;
+            padding: 4px 10px;
+            display: inline-block;
+            margin-bottom: 6px;
+        }
+
         @media (max-width: 900px) {
             .scoreboard-tv-header {
                 grid-template-columns: 1fr;
@@ -1881,7 +1869,7 @@ def run_monte_carlo_matchup(
 # COMPONENTES DE RENDERIZADO VISUAL (RADAR EJECUTIVO & TARJETAS GLASSMORPHISM)
 # ==============================================================================
 def extract_executive_radar(sim_results: List[Dict]) -> Dict:
-    """Extrae los 4 Top Picks automáticos de toda la jornada escaneada."""
+    """Extrae los 4 Top Picks automáticos evaluando únicamente los partidos seleccionados en la jornada."""
     # 1. El Lock de la Noche (Mayor Win % en Moneyline)
     best_ml = None
     for res in sim_results:
@@ -1977,7 +1965,7 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
                     "context": cand[4],
                 }
 
-    # 4. Player Prop Lean (Mejor inclinación de jugador de toda la jornada)
+    # 4. Player Prop Lean (Mejor inclinación de jugador entre los partidos escaneados)
     best_prop = None
     for res in sim_results:
         for prop in res["props"]:
@@ -1992,12 +1980,12 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
     }
 
 
-def render_executive_radar(radar: Dict) -> None:
+def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
     st.markdown(
-        """
+        f"""
         <div class="section-banner">
             <div class="section-banner-title">📡 RADAR EJECUTIVO DE LA JORNADA // TOP SYNDICATE PICKS</div>
-            <div class="section-banner-tag">AUTO-GENERATED // 5,000 MONTE CARLO SIMS</div>
+            <div class="section-banner-tag">EVALUANDO {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMULACIONES</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2128,7 +2116,7 @@ def render_game_card(res: Dict) -> None:
                 </div>
                 <div class="sb-center-console">
                     <div style="font-family:'Orbitron',sans-serif; font-size:0.68rem; color:#94A3B8; letter-spacing:0.10em;">
-                        PROYECCIÓN MEDIA (5,000 SIMS)
+                        PROYECCIÓN MEDIA ({res['n_sims']:,} SIMS)
                     </div>
                     <div class="sb-proj-score">
                         {away_abbr} {res['exp_away_pts']:.1f} &nbsp;—&nbsp; {res['exp_home_pts']:.1f} {home_abbr}
@@ -2160,9 +2148,9 @@ def render_game_card(res: Dict) -> None:
     # FILA 1: RESUMEN DE SIMULACIÓN (5,000 ITERACIONES)
     # ------------------------------------------------------------------
     st.markdown(
-        """
+        f"""
         <div class="row-label-bar">
-            <span class="row-label-title">📊 FILA 1 // RESUMEN DE SIMULACIÓN MONTE CARLO (5,000 ITERACIONES)</span>
+            <span class="row-label-title">📊 FILA 1 // RESUMEN DE SIMULACIÓN MONTE CARLO ({res['n_sims']:,} ITERACIONES)</span>
             <span class="row-label-sub">WIN % &bull; SPREAD COVER % &bull; TOTAL OVER/UNDER &bull; FAIR ODDS</span>
         </div>
         """,
@@ -2284,7 +2272,7 @@ def render_game_card(res: Dict) -> None:
         f"""
         <div class="row-label-bar" style="border-left-color: #10B981;">
             <span class="row-label-title">🔑 FILA 2 // "CÓMO GANA EL FAVORITO" ({res['fav_name'].upper()} - WIN BASE {res['fav_base_win']*100:.1f}%)</span>
-            <span class="row-label-sub">GATILLOS DE PROBABILIDAD CONDICIONAL EN LAS 5,000 SIMULACIONES</span>
+            <span class="row-label-sub">GATILLOS DE PROBABILIDAD CONDICIONAL EN LAS {res['n_sims']:,} SIMULACIONES</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2456,12 +2444,37 @@ def render_game_card(res: Dict) -> None:
 
 
 # ==============================================================================
+# GESTIÓN DE ESTADO REACTIVO PARA EL FORMULARIO Y AUTO-COLAPSO
+# ==============================================================================
+def init_session_state() -> None:
+    if "config_expanded" not in st.session_state:
+        st.session_state.config_expanded = True
+    if "num_games" not in st.session_state:
+        st.session_state.num_games = 4
+    if "active_matchups" not in st.session_state:
+        st.session_state.active_matchups = list(FULL_30_TEAM_SLATE[:4])
+    if "active_custom_lines" not in st.session_state:
+        st.session_state.active_custom_lines = {}
+
+
+def keep_config_open() -> None:
+    """Mantiene abierto el panel st.expander cuando el usuario cambia el número de partidos."""
+    st.session_state.config_expanded = True
+
+
+def reopen_config_panel() -> None:
+    """Permite reabrir el configurador con un clic tras haberse auto-colapsado."""
+    st.session_state.config_expanded = True
+
+
+# ==============================================================================
 # APLICACIÓN PRINCIPAL STREAMLIT
 # ==============================================================================
 def main() -> None:
     inject_cyber_quant_css()
+    init_session_state()
 
-    # Sidebar: Configuración del Escáner Cuantitativo
+    # Sidebar: Parámetros Globales del Motor y Control Dinámico de Cantidad de Juegos
     with st.sidebar:
         st.markdown(
             """
@@ -2469,7 +2482,7 @@ def main() -> None:
                 ⚡ SHARP SYNDICATE
             </div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">
-                NBA 30-TEAM MONTE CARLO ENGINE v4.5
+                NBA 30-TEAM MONTE CARLO ENGINE v5.0
             </div>
             """,
             unsafe_allow_html=True,
@@ -2483,6 +2496,23 @@ def main() -> None:
 
         df_teams, data_source_label = load_nba_dataset(uploaded_csv)
         team_list = df_teams["Team"].tolist()
+
+        st.markdown("---")
+        st.markdown("### 🏀 VOLUMEN DE LA CARTELERA")
+        num_games = st.slider(
+            "¿Cuántos juegos hay en la cartelera de hoy?",
+            min_value=1,
+            max_value=15,
+            key="num_games",
+            on_change=keep_config_open,
+            help="Elige de 1 a 15 partidos. El formulario principal generará dinámicamente esa cantidad exacta de selectores.",
+        )
+
+        st.button(
+            "🎛️ Abrir Configurador de Equipos",
+            on_click=reopen_config_panel,
+            use_container_width=True,
+        )
 
         st.markdown("---")
         st.markdown("### ⚙️ PARÁMETROS DEL MOTOR")
@@ -2507,79 +2537,115 @@ def main() -> None:
         )
 
         st.markdown("---")
-        st.markdown("### 🏀 CARTELERA DE LA JORNADA (30 EQUIPOS)")
-        slate_mode = st.radio(
-            "Modo de Escaneo",
-            options=[
-                "Cartelera Prime Time (6 Partidos)",
-                "Jornada Completa NBA (15 Partidos - 30 Equipos)",
-                "Duelos por División (6 Divisiones)",
-                "Laboratorio de Matchup Personalizado",
-            ],
-            index=0,
+        st.caption(f"📂 Fuente activa: {data_source_label}")
+
+    # ==========================================================================
+    # PANEL DE CONFIGURACIÓN AUTO-COLAPSABLE CON FORMULARIO DINÁMICO (st.form)
+    # ==========================================================================
+    with st.expander(
+        f"🎛️ CONFIGURADOR DINÁMICO DE CARTELERA ({num_games} JUEGO{'S' if num_games > 1 else ''} EN LA CARTELERA DE HOY)",
+        expanded=st.session_state.config_expanded,
+    ):
+        st.markdown(
+            f"""
+            <div style="font-family:'JetBrains Mono',monospace; font-size:0.78rem; color:#CBD5E1; margin-bottom:10px;">
+                Selecciona libremente el equipo <strong>Visitante (Away)</strong> y <strong>Local (Home)</strong> de entre las <strong>30 franquicias NBA</strong> para los <strong>{num_games}</strong> partidos de hoy. Al pulsar el botón de escaneo, este panel se colapsará automáticamente y el motor correrá <strong>{n_sims:,} simulaciones</strong> por juego.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        selected_matchups: List[Tuple[str, str]] = []
-        custom_lines: Dict[str, Tuple[float, float]] = {}
+        with st.form("dynamic_slate_form", clear_on_submit=False):
+            form_selections: List[Tuple[str, str]] = []
+            form_custom_lines: Dict[int, Tuple[float, float]] = {}
 
-        if slate_mode == "Cartelera Prime Time (6 Partidos)":
-            for away_t, home_t in FULL_30_TEAM_SLATE[:6]:
-                if away_t in team_list and home_t in team_list:
-                    selected_matchups.append((away_t, home_t))
-        elif slate_mode == "Jornada Completa NBA (15 Partidos - 30 Equipos)":
-            for away_t, home_t in FULL_30_TEAM_SLATE:
-                if away_t in team_list and home_t in team_list:
-                    selected_matchups.append((away_t, home_t))
-        elif slate_mode == "Duelos por División (6 Divisiones)":
-            chosen_div = st.selectbox(
-                "Seleccionar División NBA",
-                options=["Atlántico", "Central", "Noroeste", "Pacífico", "Sureste", "Suroeste"],
-                index=0,
+            for i in range(num_games):
+                default_away, default_home = FULL_30_TEAM_SLATE[i % len(FULL_30_TEAM_SLATE)]
+                if i < len(st.session_state.active_matchups):
+                    prev_away, prev_home = st.session_state.active_matchups[i]
+                    if prev_away in team_list and prev_home in team_list:
+                        default_away, default_home = prev_away, prev_home
+
+                away_idx = team_list.index(default_away) if default_away in team_list else (i * 2) % len(team_list)
+                home_idx = team_list.index(default_home) if default_home in team_list else (i * 2 + 1) % len(team_list)
+
+                st.markdown(
+                    f'<div class="slate-slot-badge">🏀 JUEGO #{i + 1} DE {num_games}</div>',
+                    unsafe_allow_html=True,
+                )
+                col_a, col_h, col_sp, col_tot = st.columns([2.2, 2.2, 1.1, 1.1])
+
+                with col_a:
+                    sel_away = st.selectbox(
+                        f"Visitante (Juego #{i + 1})",
+                        options=team_list,
+                        index=away_idx,
+                        key=f"form_away_{i}",
+                    )
+                with col_h:
+                    sel_home = st.selectbox(
+                        f"Local (Juego #{i + 1})",
+                        options=team_list,
+                        index=home_idx,
+                        key=f"form_home_{i}",
+                    )
+                with col_sp:
+                    sel_sp = st.number_input(
+                        f"Spread Local #{i + 1} (0=Auto)",
+                        value=0.0,
+                        step=0.5,
+                        key=f"form_sp_{i}",
+                    )
+                with col_tot:
+                    sel_tot = st.number_input(
+                        f"Total O/U #{i + 1} (0=Auto)",
+                        value=0.0,
+                        step=0.5,
+                        key=f"form_tot_{i}",
+                    )
+
+                form_selections.append((sel_away, sel_home))
+                form_custom_lines[i] = (
+                    sel_sp if sel_sp != 0.0 else None,
+                    sel_tot if sel_tot != 0.0 else None,
+                )
+
+            submitted = st.form_submit_button(
+                f"⚡ ESCANEAR {num_games} PARTIDO(S) DE HOY ({num_games * n_sims:,} SIMULACIONES MONTE CARLO)",
+                use_container_width=True,
             )
-            for away_t, home_t in DIVISION_MATCHUPS.get(chosen_div, []):
-                if away_t in team_list and home_t in team_list:
-                    selected_matchups.append((away_t, home_t))
-        else:
-            div_filter = st.selectbox(
-                "Filtrar Equipos por División (Opcional)",
-                options=["Todas las Divisiones", "Atlántico", "Central", "Noroeste", "Pacífico", "Sureste", "Suroeste"],
-                index=0,
-            )
-            if div_filter != "Todas las Divisiones" and "Division" in df_teams.columns:
-                filtered_teams = df_teams[df_teams["Division"] == div_filter]["Team"].tolist()
-            else:
-                filtered_teams = team_list
 
-            c_away = st.selectbox("Equipo Visitante (Away)", filtered_teams, index=min(1, len(filtered_teams) - 1))
-            c_home = st.selectbox("Equipo Local (Home)", filtered_teams, index=0)
-            if c_away == c_home:
-                st.warning("Selecciona dos equipos distintos para simular el enfrentamiento.")
-            else:
-                selected_matchups.append((c_away, c_home))
+            if submitted:
+                valid_matchups: List[Tuple[str, str]] = []
+                valid_lines: Dict[int, Tuple[float, float]] = {}
+                duplicate_team_games: List[int] = []
 
-        with st.expander("🎚️ Ajustar Líneas de Casino (Spread / Total)", expanded=False):
-            st.caption("Deja en 0.0 para usar las líneas dinámicas del mercado.")
-            for idx, (away_t, home_t) in enumerate(selected_matchups):
-                key_id = f"{away_t}@{home_t}"
-                sp_val = st.number_input(
-                    f"Spread Local ({home_t})",
-                    value=0.0,
-                    step=0.5,
-                    key=f"sp_{idx}",
-                )
-                tot_val = st.number_input(
-                    f"Total O/U ({away_t[:3]}@{home_t[:3]})",
-                    value=0.0,
-                    step=0.5,
-                    key=f"tot_{idx}",
-                )
-                custom_lines[key_id] = (
-                    sp_val if sp_val != 0.0 else None,
-                    tot_val if tot_val != 0.0 else None,
-                )
+                for idx, (away_t, home_t) in enumerate(form_selections):
+                    if away_t == home_t:
+                        duplicate_team_games.append(idx + 1)
+                    else:
+                        valid_idx = len(valid_matchups)
+                        valid_matchups.append((away_t, home_t))
+                        valid_lines[valid_idx] = form_custom_lines[idx]
 
-        st.markdown("---")
-        st.caption(f"📂 Fuente activa: {data_source_label}")
+                if duplicate_team_games:
+                    st.warning(
+                        f"Atención: El Juego #{', #'.join(map(str, duplicate_team_games))} tenía el mismo equipo como Visitante y Local y fue omitido. Selecciona dos franquicias distintas."
+                    )
+
+                if valid_matchups:
+                    st.session_state.active_matchups = valid_matchups
+                    st.session_state.active_custom_lines = valid_lines
+                    st.session_state.config_expanded = False
+                    st.rerun()
+
+    # Sincronizar si el usuario redujo el slider y aún no ha pulsado submit, o mantener la lista validada
+    selected_matchups: List[Tuple[str, str]] = st.session_state.active_matchups[:num_games]
+    if len(selected_matchups) < num_games:
+        for extra_idx in range(len(selected_matchups), num_games):
+            fallback_pair = FULL_30_TEAM_SLATE[extra_idx % len(FULL_30_TEAM_SLATE)]
+            if fallback_pair[0] in team_list and fallback_pair[1] in team_list:
+                selected_matchups.append(fallback_pair)
 
     # Scoreboard TV Header Principal
     st.markdown(
@@ -2597,12 +2663,12 @@ def main() -> None:
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
             <div class="tv-subtitle">
-                Cobertura completa de las 30 franquicias NBA (Atlántico, Central, Noroeste, Pacífico, Sureste y Suroeste) con simulación de posesiones, Synergy PPP (Iso &amp; PnR) y motor de varianza para Player Props.
+                Escáner dinámico de 1 a 15 partidos entre las 30 franquicias NBA con simulación de posesiones, Synergy PPP (Iso &amp; PnR) y motor de varianza para Player Props.
             </div>
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">FRANQUICIAS NBA: <strong>{len(df_teams)} / 30 (6 DIVISIONES)</strong></div>
-                <div class="telemetry-pill">PARTIDOS ESCANEADOS: <strong>{len(selected_matchups)}</strong></div>
-                <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{len(selected_matchups) * n_sims:,}</strong></div>
+                <div class="telemetry-pill">PARTIDOS ESCANEADOS HOY: <strong>{len(selected_matchups)}</strong></div>
+                <div class="telemetry-pill">ITERACIONES EJECUTADAS: <strong>{len(selected_matchups) * n_sims:,}</strong></div>
                 <div class="telemetry-pill">MODELO: <strong>PACE &times; ADJ_ORTG + SYNERGY PPP + BINOMIAL 3PT</strong></div>
             </div>
         </div>
@@ -2611,15 +2677,15 @@ def main() -> None:
     )
 
     if not selected_matchups:
-        st.info("Configura al menos un partido válido en el panel lateral para iniciar el escáner.")
+        st.info("Abre el configurador superior y selecciona al menos un partido válido para iniciar el escáner.")
         return
 
-    # Ejecutar las 5,000 simulaciones por partido
+    # Ejecutar las 5,000 simulaciones únicamente sobre los partidos seleccionados
     sim_results: List[Dict] = []
     for idx, (away_name, home_name) in enumerate(selected_matchups):
         away_row = df_teams[df_teams["Team"] == away_name].iloc[0]
         home_row = df_teams[df_teams["Team"] == home_name].iloc[0]
-        c_sp, c_tot = custom_lines.get(f"{away_name}@{home_name}", (None, None))
+        c_sp, c_tot = st.session_state.active_custom_lines.get(idx, (None, None))
 
         res = run_monte_carlo_matchup(
             away_row=away_row,
@@ -2632,15 +2698,15 @@ def main() -> None:
         )
         sim_results.append(res)
 
-    # 1. Renderizar Radar Ejecutivo de la Jornada (Top 4 Picks)
+    # 1. Renderizar Radar Ejecutivo Dinámico (evalúa únicamente los N partidos seleccionados)
     radar_picks = extract_executive_radar(sim_results)
-    render_executive_radar(radar_picks)
+    render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
 
     # 2. Renderizar Desglose por Partido en Tarjetas Glassmorphism
     st.markdown(
-        """
+        f"""
         <div class="section-banner">
-            <div class="section-banner-title">🖥️ DESGLOSE TÁCTICO Y CUANTITATIVO POR PARTIDO</div>
+            <div class="section-banner-title">🖥️ DESGLOSE TÁCTICO Y CUANTITATIVO ({len(sim_results)} PARTIDO{'S' if len(sim_results) > 1 else ''} ESCANEADO{'S' if len(sim_results) > 1 else ''})</div>
             <div class="section-banner-tag">SCOREBOARD TV HEADER + 4 FILAS DE INTELIGENCIA SHARP</div>
         </div>
         """,
