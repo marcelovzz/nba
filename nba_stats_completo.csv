@@ -1,0 +1,31 @@
+Team,Team_Abbr,Conference,Division,Pace,Off_Rtg,Def_Rtg,3PA_Rate,3P_Pct,TOV_Pct,Iso_PPP_Off,Iso_PPP_Def,PnR_PPP_Off,PnR_PPP_Def,Star1_Name,Star1_PPG,Star1_Line,Star1_Style,Star1_Std,Star2_Name,Star2_PPG,Star2_Line,Star2_Style,Star2_Std
+Boston Celtics,BOS,East,Atlántico,98.4,122.2,110.6,0.472,0.388,11.9,1.12,0.91,1.09,0.93,Jayson Tatum,27.1,26.5,ISO,5.9,Jaylen Brown,23.2,22.5,ISO,5.4
+Brooklyn Nets,BKN,East,Atlántico,97.6,112.1,116.4,0.418,0.362,13.8,1.01,1.07,0.99,1.08,Cam Thomas,24.2,23.5,ISO,6.3,Dennis Schroder,17.6,16.5,PNR,4.9
+New York Knicks,NYK,East,Atlántico,96.2,118.5,112.4,0.405,0.376,12.6,1.1,0.96,1.11,0.95,Jalen Brunson,28.7,27.5,PNR,6.1,Karl-Anthony Towns,22.1,21.5,PNR,5.3
+Philadelphia 76ers,PHI,East,Atlántico,97.1,116.8,113.2,0.384,0.369,12.2,1.11,0.99,1.08,0.98,Joel Embiid,29.8,28.5,ISO,6.5,Tyrese Maxey,26.1,25.5,PNR,5.8
+Toronto Raptors,TOR,East,Atlántico,100.4,112.8,117.1,0.366,0.351,14.4,0.97,1.08,1.01,1.09,Scottie Barnes,20.6,19.5,ISO,5.2,RJ Barrett,21.4,20.5,PNR,5.4
+Chicago Bulls,CHI,East,Central,101.2,114.2,116.5,0.412,0.367,13.5,1.03,1.06,1.04,1.07,Zach LaVine,22.9,22.5,ISO,5.8,Coby White,19.8,19.5,PNR,5.3
+Cleveland Cavaliers,CLE,East,Central,99.6,121.0,111.4,0.422,0.386,12.1,1.1,0.94,1.13,0.94,Donovan Mitchell,26.8,26.5,PNR,6.0,Darius Garland,20.4,19.5,PNR,5.1
+Detroit Pistons,DET,East,Central,100.6,110.4,118.2,0.358,0.348,15.2,0.94,1.13,0.97,1.11,Cade Cunningham,22.8,24.5,PNR,5.6,Jaden Ivey,16.4,16.5,ISO,4.8
+Indiana Pacers,IND,East,Central,102.4,119.8,116.8,0.395,0.378,12.7,1.06,1.08,1.14,1.09,Tyrese Haliburton,20.8,20.5,PNR,5.7,Pascal Siakam,21.6,21.5,ISO,5.1
+Milwaukee Bucks,MIL,East,Central,99.8,117.6,114.5,0.402,0.375,12.8,1.11,1.03,1.12,1.04,Giannis Antetokounmpo,30.8,30.5,ISO,6.1,Damian Lillard,25.1,24.5,PNR,6.0
+Denver Nuggets,DEN,West,Noroeste,97.4,119.4,112.3,0.342,0.374,12.1,1.06,0.98,1.14,0.97,Nikola Jokic,26.6,26.5,PNR,5.2,Jamal Murray,21.2,20.5,PNR,5.7
+Minnesota Timberwolves,MIN,West,Noroeste,97.8,115.8,109.8,0.41,0.382,13.9,1.08,0.9,1.06,0.91,Anthony Edwards,27.6,26.5,ISO,6.2,Julius Randle,20.9,20.5,ISO,5.2
+Oklahoma City Thunder,OKC,West,Noroeste,100.5,120.4,109.2,0.398,0.389,11.6,1.14,0.89,1.11,0.9,Shai Gilgeous-Alexander,30.2,29.5,ISO,5.4,Jalen Williams,21.1,20.5,PNR,4.9
+Portland Trail Blazers,POR,West,Noroeste,99.1,109.6,117.4,0.372,0.346,15.0,0.95,1.1,0.98,1.09,Anfernee Simons,21.5,21.5,PNR,5.9,Jerami Grant,19.2,18.5,ISO,5.1
+Utah Jazz,UTA,West,Noroeste,100.2,113.2,118.9,0.408,0.356,15.4,0.99,1.11,1.02,1.12,Lauri Markkanen,23.1,22.5,PNR,5.5,Keyonte George,16.9,16.5,PNR,5.2
+Golden State Warriors,GSW,West,Pacífico,100.8,117.3,113.8,0.456,0.38,14.3,1.04,1.0,1.1,1.01,Stephen Curry,26.8,26.5,PNR,6.4,Jonathan Kuminga,16.8,16.5,ISO,4.9
+LA Clippers,LAC,West,Pacífico,96.9,115.6,113.1,0.389,0.376,13.2,1.11,0.99,1.09,0.98,James Harden,21.6,20.5,ISO,5.8,Norman Powell,22.4,21.5,PNR,5.4
+Los Angeles Lakers,LAL,West,Pacífico,101.4,115.9,115.2,0.349,0.377,13.4,1.07,1.04,1.08,1.05,LeBron James,25.4,24.5,ISO,5.5,Anthony Davis,24.8,24.5,PNR,5.8
+Phoenix Suns,PHX,West,Pacífico,98.2,117.9,114.4,0.392,0.382,14.1,1.13,1.02,1.09,1.03,Kevin Durant,27.3,26.5,ISO,5.6,Devin Booker,26.9,26.5,PNR,6.1
+Sacramento Kings,SAC,West,Pacífico,100.1,117.2,114.9,0.396,0.368,12.8,1.08,1.04,1.1,1.04,De'Aaron Fox,26.4,25.5,PNR,6.0,DeMar DeRozan,22.8,21.5,ISO,5.0
+Atlanta Hawks,ATL,East,Sureste,101.8,116.4,117.6,0.394,0.364,13.7,1.03,1.09,1.11,1.1,Trae Young,25.8,25.5,PNR,6.3,Jalen Johnson,19.4,18.5,PNR,5.1
+Charlotte Hornets,CHA,East,Sureste,98.9,111.2,117.8,0.415,0.355,14.6,0.98,1.1,1.03,1.1,LaMelo Ball,26.2,25.5,PNR,6.5,Brandon Miller,20.8,20.5,ISO,5.5
+Miami Heat,MIA,East,Sureste,95.8,113.6,111.5,0.388,0.37,12.4,1.03,0.93,1.01,0.92,Jimmy Butler,21.4,20.5,ISO,5.1,Bam Adebayo,19.6,19.5,PNR,4.6
+Orlando Magic,ORL,East,Sureste,96.8,112.9,109.9,0.354,0.352,14.1,1.02,0.91,1.01,0.91,Paolo Banchero,25.2,24.5,ISO,5.7,Franz Wagner,22.4,21.5,PNR,5.3
+Washington Wizards,WAS,East,Sureste,102.6,109.8,119.4,0.392,0.347,15.1,0.95,1.14,0.96,1.13,Jordan Poole,20.4,19.5,PNR,6.1,Kyle Kuzma,18.8,18.5,ISO,5.4
+Dallas Mavericks,DAL,West,Suroeste,100.2,118.1,114.6,0.441,0.372,12.3,1.15,1.03,1.12,1.02,Luka Doncic,32.4,31.5,ISO,6.6,Kyrie Irving,25.3,24.5,ISO,5.9
+Houston Rockets,HOU,West,Suroeste,99.4,115.2,111.2,0.378,0.358,12.6,1.04,0.94,1.05,0.93,Alperen Sengun,21.3,20.5,PNR,5.2,Jalen Green,21.8,21.5,ISO,6.2
+Memphis Grizzlies,MEM,West,Suroeste,101.6,116.1,113.0,0.382,0.366,13.8,1.06,0.97,1.09,0.96,Ja Morant,25.6,24.5,PNR,5.9,Jaren Jackson Jr.,22.1,21.5,ISO,5.4
+New Orleans Pelicans,NOP,West,Suroeste,98.3,114.8,113.9,0.371,0.369,13.4,1.07,1.01,1.04,1.0,Zion Williamson,23.6,22.5,ISO,5.5,Brandon Ingram,21.9,21.5,ISO,5.2
+San Antonio Spurs,SAS,West,Suroeste,100.9,113.1,113.4,0.391,0.359,14.5,1.02,0.96,1.05,0.95,Victor Wembanyama,24.4,23.5,PNR,5.8,Devin Vassell,18.9,18.5,PNR,5.0
