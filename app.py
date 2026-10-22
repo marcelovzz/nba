@@ -1,10 +1,42 @@
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# ==============================================================================
+# 1. CLIENTE HTTP ROBUSTO CON HEADERS PARA NBA_API (ANTI-BLOQUEO / CLOUD SAFE)
+# ==============================================================================
+CUSTOM_HEADERS = {
+    "Host": "stats.nba.com",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "x-nba-stats-origin": "stats",
+    "x-nba-stats-token": "true",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nba.com/",
+}
+
+try:
+    from nba_api.stats.library.http import NBAStatsHTTP
+    from nba_api.stats.endpoints import LeagueDashPlayerStats, LeagueDashTeamStats
+
+    NBAStatsHTTP.headers = CUSTOM_HEADERS
+    NBA_API_AVAILABLE = True
+except Exception:
+    NBAStatsHTTP = None
+    LeagueDashTeamStats = None
+    LeagueDashPlayerStats = None
+    NBA_API_AVAILABLE = False
 
 # ==============================================================================
 # CONFIGURACIÓN DE PÁGINA Y CONSTANTES GLOBALES
@@ -16,6 +48,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+NBA_SEASON_TARGET = "2026-27"
 LEAGUE_AVG_ORTG = 115.5
 LEAGUE_AVG_PACE = 99.0
 LEAGUE_AVG_ISO_PPP = 1.03
@@ -23,7 +56,7 @@ LEAGUE_AVG_PNR_PPP = 1.04
 LEAGUE_AVG_TOV = 13.1
 
 # ==============================================================================
-# 1. DICCIONARIO Y CDN OFICIAL DE LOGOS (ESPN CDN)
+# DICCIONARIO Y CDN OFICIAL DE LOGOS (ESPN CDN)
 # ==============================================================================
 URL_NBA_LOGOS = "https://a.espncdn.com/i/teamlogos/nba/500/{}.png"
 
@@ -83,7 +116,6 @@ TEAM_COLORS: Dict[str, Tuple[str, str]] = {
     "SAS": ("#000000", "#C4CED4"),
 }
 
-# Racha reciente de forma (Últimos 5 juegos) para las pastillas W/L de la Cartelera
 TEAM_RECENT_FORM: Dict[str, List[str]] = {
     "BOS": ["W", "W", "W", "L", "W"],
     "BKN": ["L", "W", "L", "L", "W"],
@@ -123,7 +155,9 @@ GAME_SLATE_TIMES: List[str] = [
     "22:00 ET", "22:00 ET", "22:30 ET", "22:30 ET", "23:00 ET",
 ]
 
-# Dataset completo embebido con los 30 equipos de la NBA por División
+# ==============================================================================
+# BASE DE DATOS PREDETERMINADA: 30 FRANQUICIAS + QUINTETOS TITULARES EPM
+# ==============================================================================
 DEFAULT_CSV_DATA = [
     # ==================== DIVISIÓN ATLÁNTICO (EAST) ====================
     {
@@ -913,7 +947,250 @@ DEFAULT_CSV_DATA = [
     },
 ]
 
-# Plantilla de cruces por defecto para inicializar selectores dinámicos (1 a 15 juegos)
+# Quintetos titulares base + unidad de banca (240 min) con O-EPM y D-EPM para las 30 franquicias
+DEFAULT_LINEUPS_30_TEAMS: Dict[str, List[Dict]] = {
+    "BOS": [
+        {"Posición": "PG", "Jugador": "Jrue Holiday", "Minutos_Esperados": 33.0, "O_EPM": 1.4, "D_EPM": 2.3},
+        {"Posición": "SG", "Jugador": "Derrick White", "Minutos_Esperados": 34.0, "O_EPM": 2.6, "D_EPM": 2.4},
+        {"Posición": "SF", "Jugador": "Jaylen Brown", "Minutos_Esperados": 35.0, "O_EPM": 2.8, "D_EPM": 0.9},
+        {"Posición": "PF", "Jugador": "Jayson Tatum", "Minutos_Esperados": 36.0, "O_EPM": 4.8, "D_EPM": 1.5},
+        {"Posición": "C", "Jugador": "Kristaps Porzingis", "Minutos_Esperados": 30.0, "O_EPM": 2.9, "D_EPM": 2.1},
+        {"Posición": "BENCH", "Jugador": "Pritchard / Horford / Hauser", "Minutos_Esperados": 72.0, "O_EPM": 0.9, "D_EPM": 0.6},
+    ],
+    "BKN": [
+        {"Posición": "PG", "Jugador": "Dennis Schroder", "Minutos_Esperados": 32.0, "O_EPM": 0.5, "D_EPM": -0.6},
+        {"Posición": "SG", "Jugador": "Cam Thomas", "Minutos_Esperados": 34.0, "O_EPM": 1.6, "D_EPM": -1.8},
+        {"Posición": "SF", "Jugador": "Cameron Johnson", "Minutos_Esperados": 31.0, "O_EPM": 1.1, "D_EPM": -0.2},
+        {"Posición": "PF", "Jugador": "Dorian Finney-Smith", "Minutos_Esperados": 29.0, "O_EPM": -1.2, "D_EPM": 0.8},
+        {"Posición": "C", "Jugador": "Nic Claxton", "Minutos_Esperados": 30.0, "O_EPM": -0.5, "D_EPM": 1.9},
+        {"Posición": "BENCH", "Jugador": "Simmons / Clowney / Wilson", "Minutos_Esperados": 84.0, "O_EPM": -1.6, "D_EPM": -0.6},
+    ],
+    "NYK": [
+        {"Posición": "PG", "Jugador": "Jalen Brunson", "Minutos_Esperados": 36.0, "O_EPM": 5.4, "D_EPM": -0.4},
+        {"Posición": "SG", "Jugador": "Mikal Bridges", "Minutos_Esperados": 35.0, "O_EPM": 1.2, "D_EPM": 0.9},
+        {"Posición": "SF", "Jugador": "OG Anunoby", "Minutos_Esperados": 35.0, "O_EPM": 1.0, "D_EPM": 3.1},
+        {"Posición": "PF", "Jugador": "Josh Hart", "Minutos_Esperados": 34.0, "O_EPM": 0.4, "D_EPM": 1.5},
+        {"Posición": "C", "Jugador": "Karl-Anthony Towns", "Minutos_Esperados": 34.0, "O_EPM": 3.1, "D_EPM": 0.5},
+        {"Posición": "BENCH", "Jugador": "McBride / Achiuwa / Payne", "Minutos_Esperados": 66.0, "O_EPM": -0.4, "D_EPM": 0.6},
+    ],
+    "PHI": [
+        {"Posición": "PG", "Jugador": "Tyrese Maxey", "Minutos_Esperados": 36.0, "O_EPM": 3.8, "D_EPM": -0.3},
+        {"Posición": "SG", "Jugador": "Kelly Oubre Jr.", "Minutos_Esperados": 31.0, "O_EPM": -0.3, "D_EPM": 0.4},
+        {"Posición": "SF", "Jugador": "Paul George", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 1.6},
+        {"Posición": "PF", "Jugador": "Caleb Martin", "Minutos_Esperados": 29.0, "O_EPM": -0.6, "D_EPM": 0.7},
+        {"Posición": "C", "Jugador": "Joel Embiid", "Minutos_Esperados": 34.0, "O_EPM": 5.6, "D_EPM": 3.2},
+        {"Posición": "BENCH", "Jugador": "Lowry / Drummond / McCain", "Minutos_Esperados": 76.0, "O_EPM": -1.4, "D_EPM": -0.2},
+    ],
+    "TOR": [
+        {"Posición": "PG", "Jugador": "Immanuel Quickley", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": -0.3},
+        {"Posición": "SG", "Jugador": "Gradey Dick", "Minutos_Esperados": 29.0, "O_EPM": 0.2, "D_EPM": -1.4},
+        {"Posición": "SF", "Jugador": "RJ Barrett", "Minutos_Esperados": 33.0, "O_EPM": 1.1, "D_EPM": -0.9},
+        {"Posición": "PF", "Jugador": "Scottie Barnes", "Minutos_Esperados": 35.0, "O_EPM": 1.8, "D_EPM": 1.2},
+        {"Posición": "C", "Jugador": "Jakob Poeltl", "Minutos_Esperados": 30.0, "O_EPM": 0.3, "D_EPM": 1.4},
+        {"Posición": "BENCH", "Jugador": "Boucher / Agbaji / Mitchell", "Minutos_Esperados": 80.0, "O_EPM": -1.8, "D_EPM": -1.1},
+    ],
+    "CHI": [
+        {"Posición": "PG", "Jugador": "Josh Giddey", "Minutos_Esperados": 31.0, "O_EPM": 0.6, "D_EPM": -0.8},
+        {"Posición": "SG", "Jugador": "Coby White", "Minutos_Esperados": 34.0, "O_EPM": 1.7, "D_EPM": -0.7},
+        {"Posición": "SF", "Jugador": "Zach LaVine", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": -1.1},
+        {"Posición": "PF", "Jugador": "Patrick Williams", "Minutos_Esperados": 28.0, "O_EPM": -1.3, "D_EPM": 0.5},
+        {"Posición": "C", "Jugador": "Nikola Vucevic", "Minutos_Esperados": 32.0, "O_EPM": 0.8, "D_EPM": -0.6},
+        {"Posición": "BENCH", "Jugador": "Dosunmu / Ball / Smith", "Minutos_Esperados": 81.0, "O_EPM": -1.1, "D_EPM": -0.2},
+    ],
+    "CLE": [
+        {"Posición": "PG", "Jugador": "Darius Garland", "Minutos_Esperados": 32.0, "O_EPM": 2.4, "D_EPM": -0.2},
+        {"Posición": "SG", "Jugador": "Donovan Mitchell", "Minutos_Esperados": 35.0, "O_EPM": 4.9, "D_EPM": 1.1},
+        {"Posición": "SF", "Jugador": "Max Strus", "Minutos_Esperados": 29.0, "O_EPM": 0.8, "D_EPM": 0.4},
+        {"Posición": "PF", "Jugador": "Evan Mobley", "Minutos_Esperados": 33.0, "O_EPM": 1.6, "D_EPM": 3.0},
+        {"Posición": "C", "Jugador": "Jarrett Allen", "Minutos_Esperados": 32.0, "O_EPM": 1.5, "D_EPM": 2.4},
+        {"Posición": "BENCH", "Jugador": "LeVert / Jerome / Wade", "Minutos_Esperados": 79.0, "O_EPM": 0.7, "D_EPM": 0.6},
+    ],
+    "DET": [
+        {"Posición": "PG", "Jugador": "Cade Cunningham", "Minutos_Esperados": 35.0, "O_EPM": 2.2, "D_EPM": -0.9},
+        {"Posición": "SG", "Jugador": "Jaden Ivey", "Minutos_Esperados": 31.0, "O_EPM": 0.3, "D_EPM": -1.4},
+        {"Posición": "SF", "Jugador": "Tim Hardaway Jr.", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": -1.5},
+        {"Posición": "PF", "Jugador": "Tobias Harris", "Minutos_Esperados": 32.0, "O_EPM": 0.4, "D_EPM": -0.3},
+        {"Posición": "C", "Jugador": "Jalen Duren", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": -0.6},
+        {"Posición": "BENCH", "Jugador": "Beasley / Thompson / Stewart", "Minutos_Esperados": 84.0, "O_EPM": -2.2, "D_EPM": -0.7},
+    ],
+    "IND": [
+        {"Posición": "PG", "Jugador": "Tyrese Haliburton", "Minutos_Esperados": 35.0, "O_EPM": 5.1, "D_EPM": -1.3},
+        {"Posición": "SG", "Jugador": "Andrew Nembhard", "Minutos_Esperados": 30.0, "O_EPM": 0.8, "D_EPM": 0.9},
+        {"Posición": "SF", "Jugador": "Aaron Nesmith", "Minutos_Esperados": 29.0, "O_EPM": 0.7, "D_EPM": 0.6},
+        {"Posición": "PF", "Jugador": "Pascal Siakam", "Minutos_Esperados": 34.0, "O_EPM": 2.7, "D_EPM": 0.4},
+        {"Posición": "C", "Jugador": "Myles Turner", "Minutos_Esperados": 30.0, "O_EPM": 1.4, "D_EPM": 1.1},
+        {"Posición": "BENCH", "Jugador": "Mathurin / McConnell / Toppin", "Minutos_Esperados": 82.0, "O_EPM": 0.8, "D_EPM": -1.2},
+    ],
+    "MIL": [
+        {"Posición": "PG", "Jugador": "Damian Lillard", "Minutos_Esperados": 35.0, "O_EPM": 3.9, "D_EPM": -1.2},
+        {"Posición": "SG", "Jugador": "Gary Trent Jr.", "Minutos_Esperados": 30.0, "O_EPM": 0.5, "D_EPM": -0.3},
+        {"Posición": "SF", "Jugador": "Taurean Prince", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": 0.2},
+        {"Posición": "PF", "Jugador": "Giannis Antetokounmpo", "Minutos_Esperados": 36.0, "O_EPM": 5.5, "D_EPM": 2.3},
+        {"Posición": "C", "Jugador": "Brook Lopez", "Minutos_Esperados": 30.0, "O_EPM": 0.3, "D_EPM": 1.8},
+        {"Posición": "BENCH", "Jugador": "Portis / Wright / Connaughton", "Minutos_Esperados": 81.0, "O_EPM": -0.9, "D_EPM": -0.4},
+    ],
+    "DEN": [
+        {"Posición": "PG", "Jugador": "Jamal Murray", "Minutos_Esperados": 35.0, "O_EPM": 3.2, "D_EPM": -0.1},
+        {"Posición": "SG", "Jugador": "Christian Braun", "Minutos_Esperados": 31.0, "O_EPM": 0.3, "D_EPM": 1.1},
+        {"Posición": "SF", "Jugador": "Michael Porter Jr.", "Minutos_Esperados": 34.0, "O_EPM": 2.0, "D_EPM": 0.3},
+        {"Posición": "PF", "Jugador": "Aaron Gordon", "Minutos_Esperados": 33.0, "O_EPM": 1.3, "D_EPM": 1.4},
+        {"Posición": "C", "Jugador": "Nikola Jokic", "Minutos_Esperados": 36.0, "O_EPM": 6.8, "D_EPM": 2.2},
+        {"Posición": "BENCH", "Jugador": "Westbrook / Watson / Strawther", "Minutos_Esperados": 71.0, "O_EPM": -1.4, "D_EPM": 0.2},
+    ],
+    "MIN": [
+        {"Posición": "PG", "Jugador": "Mike Conley", "Minutos_Esperados": 29.0, "O_EPM": 1.8, "D_EPM": 0.7},
+        {"Posición": "SG", "Jugador": "Anthony Edwards", "Minutos_Esperados": 36.0, "O_EPM": 4.2, "D_EPM": 1.4},
+        {"Posición": "SF", "Jugador": "Jaden McDaniels", "Minutos_Esperados": 31.0, "O_EPM": -0.6, "D_EPM": 2.2},
+        {"Posición": "PF", "Jugador": "Julius Randle", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": 0.1},
+        {"Posición": "C", "Jugador": "Rudy Gobert", "Minutos_Esperados": 34.0, "O_EPM": 0.1, "D_EPM": 3.8},
+        {"Posición": "BENCH", "Jugador": "Reid / DiVincenzo / Alexander-Walker", "Minutos_Esperados": 76.0, "O_EPM": 0.4, "D_EPM": 1.3},
+    ],
+    "OKC": [
+        {"Posición": "PG", "Jugador": "Shai Gilgeous-Alexander", "Minutos_Esperados": 35.0, "O_EPM": 6.1, "D_EPM": 2.5},
+        {"Posición": "SG", "Jugador": "Luguentz Dort", "Minutos_Esperados": 30.0, "O_EPM": 0.1, "D_EPM": 2.2},
+        {"Posición": "SF", "Jugador": "Alex Caruso", "Minutos_Esperados": 28.0, "O_EPM": 0.3, "D_EPM": 3.4},
+        {"Posición": "PF", "Jugador": "Jalen Williams", "Minutos_Esperados": 34.0, "O_EPM": 3.1, "D_EPM": 1.6},
+        {"Posición": "C", "Jugador": "Chet Holmgren", "Minutos_Esperados": 32.0, "O_EPM": 2.2, "D_EPM": 3.5},
+        {"Posición": "BENCH", "Jugador": "Wallace / Joe / Wiggins", "Minutos_Esperados": 81.0, "O_EPM": 0.6, "D_EPM": 1.0},
+    ],
+    "POR": [
+        {"Posición": "PG", "Jugador": "Scoot Henderson", "Minutos_Esperados": 30.0, "O_EPM": -1.4, "D_EPM": -1.2},
+        {"Posición": "SG", "Jugador": "Anfernee Simons", "Minutos_Esperados": 34.0, "O_EPM": 1.8, "D_EPM": -2.1},
+        {"Posición": "SF", "Jugador": "Deni Avdija", "Minutos_Esperados": 31.0, "O_EPM": 0.4, "D_EPM": 0.8},
+        {"Posición": "PF", "Jugador": "Jerami Grant", "Minutos_Esperados": 33.0, "O_EPM": 0.9, "D_EPM": -0.7},
+        {"Posición": "C", "Jugador": "Deandre Ayton", "Minutos_Esperados": 31.0, "O_EPM": 0.1, "D_EPM": 0.5},
+        {"Posición": "BENCH", "Jugador": "Sharpe / Clingan / Camara", "Minutos_Esperados": 81.0, "O_EPM": -2.1, "D_EPM": -0.4},
+    ],
+    "UTA": [
+        {"Posición": "PG", "Jugador": "Keyonte George", "Minutos_Esperados": 31.0, "O_EPM": 0.5, "D_EPM": -1.9},
+        {"Posición": "SG", "Jugador": "Collin Sexton", "Minutos_Esperados": 30.0, "O_EPM": 2.1, "D_EPM": -1.5},
+        {"Posición": "SF", "Jugador": "Lauri Markkanen", "Minutos_Esperados": 34.0, "O_EPM": 3.5, "D_EPM": 0.2},
+        {"Posición": "PF", "Jugador": "Taylor Hendricks", "Minutos_Esperados": 27.0, "O_EPM": -1.1, "D_EPM": 0.4},
+        {"Posición": "C", "Jugador": "Walker Kessler", "Minutos_Esperados": 29.0, "O_EPM": -0.2, "D_EPM": 2.3},
+        {"Posición": "BENCH", "Jugador": "Clarkson / Collins / Filipowski", "Minutos_Esperados": 89.0, "O_EPM": -1.2, "D_EPM": -1.8},
+    ],
+    "GSW": [
+        {"Posición": "PG", "Jugador": "Stephen Curry", "Minutos_Esperados": 34.0, "O_EPM": 5.6, "D_EPM": -0.3},
+        {"Posición": "SG", "Jugador": "Brandin Podziemski", "Minutos_Esperados": 29.0, "O_EPM": 0.6, "D_EPM": 0.8},
+        {"Posición": "SF", "Jugador": "Andrew Wiggins", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": 0.9},
+        {"Posición": "PF", "Jugador": "Jonathan Kuminga", "Minutos_Esperados": 30.0, "O_EPM": 1.1, "D_EPM": 0.1},
+        {"Posición": "C", "Jugador": "Draymond Green", "Minutos_Esperados": 30.0, "O_EPM": 0.4, "D_EPM": 3.3},
+        {"Posición": "BENCH", "Jugador": "Hield / Melton / Jackson-Davis", "Minutos_Esperados": 87.0, "O_EPM": 0.3, "D_EPM": 0.5},
+    ],
+    "LAC": [
+        {"Posición": "PG", "Jugador": "James Harden", "Minutos_Esperados": 35.0, "O_EPM": 3.7, "D_EPM": 0.1},
+        {"Posición": "SG", "Jugador": "Norman Powell", "Minutos_Esperados": 33.0, "O_EPM": 2.2, "D_EPM": -0.4},
+        {"Posición": "SF", "Jugador": "Terance Mann", "Minutos_Esperados": 29.0, "O_EPM": -0.2, "D_EPM": 0.9},
+        {"Posición": "PF", "Jugador": "Derrick Jones Jr.", "Minutos_Esperados": 28.0, "O_EPM": -0.3, "D_EPM": 1.4},
+        {"Posición": "C", "Jugador": "Ivica Zubac", "Minutos_Esperados": 32.0, "O_EPM": 1.2, "D_EPM": 1.9},
+        {"Posición": "BENCH", "Jugador": "Dunn / Coffey / Batum", "Minutos_Esperados": 83.0, "O_EPM": -0.8, "D_EPM": 0.8},
+    ],
+    "LAL": [
+        {"Posición": "PG", "Jugador": "D'Angelo Russell", "Minutos_Esperados": 31.0, "O_EPM": 1.8, "D_EPM": -1.1},
+        {"Posición": "SG", "Jugador": "Austin Reaves", "Minutos_Esperados": 34.0, "O_EPM": 1.9, "D_EPM": -0.5},
+        {"Posición": "SF", "Jugador": "Rui Hachimura", "Minutos_Esperados": 30.0, "O_EPM": 0.6, "D_EPM": -0.6},
+        {"Posición": "PF", "Jugador": "LeBron James", "Minutos_Esperados": 35.0, "O_EPM": 4.4, "D_EPM": 0.9},
+        {"Posición": "C", "Jugador": "Anthony Davis", "Minutos_Esperados": 36.0, "O_EPM": 3.1, "D_EPM": 3.7},
+        {"Posición": "BENCH", "Jugador": "Vincent / Knecht / Hayes", "Minutos_Esperados": 74.0, "O_EPM": -1.6, "D_EPM": -0.4},
+    ],
+    "PHX": [
+        {"Posición": "PG", "Jugador": "Tyus Jones", "Minutos_Esperados": 30.0, "O_EPM": 1.7, "D_EPM": -0.8},
+        {"Posición": "SG", "Jugador": "Devin Booker", "Minutos_Esperados": 36.0, "O_EPM": 4.3, "D_EPM": -0.2},
+        {"Posición": "SF", "Jugador": "Bradley Beal", "Minutos_Esperados": 33.0, "O_EPM": 1.5, "D_EPM": -0.4},
+        {"Posición": "PF", "Jugador": "Kevin Durant", "Minutos_Esperados": 36.0, "O_EPM": 4.5, "D_EPM": 1.3},
+        {"Posición": "C", "Jugador": "Jusuf Nurkic", "Minutos_Esperados": 28.0, "O_EPM": 0.2, "D_EPM": 1.5},
+        {"Posición": "BENCH", "Jugador": "Allen / O'Neale / Plumlee", "Minutos_Esperados": 77.0, "O_EPM": -0.5, "D_EPM": 0.2},
+    ],
+    "SAC": [
+        {"Posición": "PG", "Jugador": "De'Aaron Fox", "Minutos_Esperados": 36.0, "O_EPM": 3.8, "D_EPM": 0.8},
+        {"Posición": "SG", "Jugador": "Kevin Huerter", "Minutos_Esperados": 28.0, "O_EPM": 0.6, "D_EPM": -0.7},
+        {"Posición": "SF", "Jugador": "DeMar DeRozan", "Minutos_Esperados": 35.0, "O_EPM": 2.4, "D_EPM": -0.3},
+        {"Posición": "PF", "Jugador": "Keegan Murray", "Minutos_Esperados": 34.0, "O_EPM": 0.9, "D_EPM": 1.1},
+        {"Posición": "C", "Jugador": "Domantas Sabonis", "Minutos_Esperados": 36.0, "O_EPM": 3.3, "D_EPM": 0.9},
+        {"Posición": "BENCH", "Jugador": "Monk / Ellis / Lyles", "Minutos_Esperados": 71.0, "O_EPM": -0.6, "D_EPM": -0.2},
+    ],
+    "ATL": [
+        {"Posición": "PG", "Jugador": "Trae Young", "Minutos_Esperados": 36.0, "O_EPM": 4.6, "D_EPM": -2.2},
+        {"Posición": "SG", "Jugador": "Dyson Daniels", "Minutos_Esperados": 30.0, "O_EPM": -0.5, "D_EPM": 2.4},
+        {"Posición": "SF", "Jugador": "Zaccharie Risacher", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": 0.2},
+        {"Posición": "PF", "Jugador": "Jalen Johnson", "Minutos_Esperados": 35.0, "O_EPM": 2.1, "D_EPM": 0.9},
+        {"Posición": "C", "Jugador": "Clint Capela", "Minutos_Esperados": 27.0, "O_EPM": 0.3, "D_EPM": 1.3},
+        {"Posición": "BENCH", "Jugador": "Bogdanovic / Hunter / Okongwu", "Minutos_Esperados": 84.0, "O_EPM": 0.2, "D_EPM": -1.3},
+    ],
+    "CHA": [
+        {"Posición": "PG", "Jugador": "LaMelo Ball", "Minutos_Esperados": 34.0, "O_EPM": 3.6, "D_EPM": -1.4},
+        {"Posición": "SG", "Jugador": "Josh Green", "Minutos_Esperados": 28.0, "O_EPM": -0.6, "D_EPM": 0.3},
+        {"Posición": "SF", "Jugador": "Brandon Miller", "Minutos_Esperados": 34.0, "O_EPM": 1.4, "D_EPM": -0.8},
+        {"Posición": "PF", "Jugador": "Miles Bridges", "Minutos_Esperados": 34.0, "O_EPM": 0.9, "D_EPM": -0.9},
+        {"Posición": "C", "Jugador": "Mark Williams", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": 1.1},
+        {"Posición": "BENCH", "Jugador": "Mann / Micic / Richards", "Minutos_Esperados": 81.0, "O_EPM": -2.2, "D_EPM": -1.2},
+    ],
+    "MIA": [
+        {"Posición": "PG", "Jugador": "Terry Rozier", "Minutos_Esperados": 31.0, "O_EPM": 0.8, "D_EPM": -0.4},
+        {"Posición": "SG", "Jugador": "Tyler Herro", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": -0.3},
+        {"Posición": "SF", "Jugador": "Jimmy Butler", "Minutos_Esperados": 34.0, "O_EPM": 3.6, "D_EPM": 1.9},
+        {"Posición": "PF", "Jugador": "Nikola Jovic", "Minutos_Esperados": 26.0, "O_EPM": 0.2, "D_EPM": 0.4},
+        {"Posición": "C", "Jugador": "Bam Adebayo", "Minutos_Esperados": 35.0, "O_EPM": 1.1, "D_EPM": 3.2},
+        {"Posición": "BENCH", "Jugador": "Jaquez Jr. / Robinson / Highsmith", "Minutos_Esperados": 80.0, "O_EPM": -1.1, "D_EPM": 0.9},
+    ],
+    "ORL": [
+        {"Posición": "PG", "Jugador": "Jalen Suggs", "Minutos_Esperados": 31.0, "O_EPM": 0.9, "D_EPM": 3.1},
+        {"Posición": "SG", "Jugador": "Kentavious Caldwell-Pope", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": 1.8},
+        {"Posición": "SF", "Jugador": "Franz Wagner", "Minutos_Esperados": 34.0, "O_EPM": 2.6, "D_EPM": 1.6},
+        {"Posición": "PF", "Jugador": "Paolo Banchero", "Minutos_Esperados": 35.0, "O_EPM": 2.8, "D_EPM": 0.8},
+        {"Posición": "C", "Jugador": "Wendell Carter Jr.", "Minutos_Esperados": 29.0, "O_EPM": 0.4, "D_EPM": 1.5},
+        {"Posición": "BENCH", "Jugador": "Isaac / Anthony / Bitadze", "Minutos_Esperados": 81.0, "O_EPM": -1.6, "D_EPM": 1.4},
+    ],
+    "WAS": [
+        {"Posición": "PG", "Jugador": "Jordan Poole", "Minutos_Esperados": 32.0, "O_EPM": 0.4, "D_EPM": -2.3},
+        {"Posición": "SG", "Jugador": "Malcolm Brogdon", "Minutos_Esperados": 28.0, "O_EPM": 0.6, "D_EPM": -0.9},
+        {"Posición": "SF", "Jugador": "Bilal Coulibaly", "Minutos_Esperados": 30.0, "O_EPM": -1.2, "D_EPM": 0.7},
+        {"Posición": "PF", "Jugador": "Kyle Kuzma", "Minutos_Esperados": 33.0, "O_EPM": 0.5, "D_EPM": -1.4},
+        {"Posición": "C", "Jugador": "Alex Sarr", "Minutos_Esperados": 28.0, "O_EPM": -1.6, "D_EPM": 0.6},
+        {"Posición": "BENCH", "Jugador": "Valanciunas / Kispert / Carrington", "Minutos_Esperados": 89.0, "O_EPM": -1.8, "D_EPM": -1.5},
+    ],
+    "DAL": [
+        {"Posición": "PG", "Jugador": "Luka Doncic", "Minutos_Esperados": 37.0, "O_EPM": 6.4, "D_EPM": 0.4},
+        {"Posición": "SG", "Jugador": "Kyrie Irving", "Minutos_Esperados": 35.0, "O_EPM": 4.1, "D_EPM": 0.2},
+        {"Posición": "SF", "Jugador": "Klay Thompson", "Minutos_Esperados": 30.0, "O_EPM": 1.1, "D_EPM": -0.5},
+        {"Posición": "PF", "Jugador": "P.J. Washington", "Minutos_Esperados": 32.0, "O_EPM": 0.2, "D_EPM": 1.2},
+        {"Posición": "C", "Jugador": "Daniel Gafford", "Minutos_Esperados": 26.0, "O_EPM": 1.0, "D_EPM": 1.6},
+        {"Posición": "BENCH", "Jugador": "Lively II / Grimes / Marshall", "Minutos_Esperados": 80.0, "O_EPM": -0.6, "D_EPM": 0.7},
+    ],
+    "HOU": [
+        {"Posición": "PG", "Jugador": "Fred VanVleet", "Minutos_Esperados": 35.0, "O_EPM": 2.3, "D_EPM": 1.6},
+        {"Posición": "SG", "Jugador": "Jalen Green", "Minutos_Esperados": 33.0, "O_EPM": 1.5, "D_EPM": -0.2},
+        {"Posición": "SF", "Jugador": "Dillon Brooks", "Minutos_Esperados": 31.0, "O_EPM": -0.6, "D_EPM": 1.4},
+        {"Posición": "PF", "Jugador": "Jabari Smith Jr.", "Minutos_Esperados": 32.0, "O_EPM": 0.3, "D_EPM": 1.3},
+        {"Posición": "C", "Jugador": "Alperen Sengun", "Minutos_Esperados": 33.0, "O_EPM": 3.1, "D_EPM": 1.1},
+        {"Posición": "BENCH", "Jugador": "Thompson / Eason / Sheppard", "Minutos_Esperados": 76.0, "O_EPM": -0.8, "D_EPM": 1.5},
+    ],
+    "MEM": [
+        {"Posición": "PG", "Jugador": "Ja Morant", "Minutos_Esperados": 34.0, "O_EPM": 3.9, "D_EPM": -0.3},
+        {"Posición": "SG", "Jugador": "Desmond Bane", "Minutos_Esperados": 34.0, "O_EPM": 2.8, "D_EPM": 0.6},
+        {"Posición": "SF", "Jugador": "Marcus Smart", "Minutos_Esperados": 29.0, "O_EPM": -0.4, "D_EPM": 1.9},
+        {"Posición": "PF", "Jugador": "Jaren Jackson Jr.", "Minutos_Esperados": 32.0, "O_EPM": 1.5, "D_EPM": 2.8},
+        {"Posición": "C", "Jugador": "Zach Edey", "Minutos_Esperados": 26.0, "O_EPM": 0.4, "D_EPM": 1.1},
+        {"Posición": "BENCH", "Jugador": "Aldama / Pippen Jr. / Clarke", "Minutos_Esperados": 85.0, "O_EPM": -0.6, "D_EPM": 0.3},
+    ],
+    "NOP": [
+        {"Posición": "PG", "Jugador": "Dejounte Murray", "Minutos_Esperados": 34.0, "O_EPM": 1.7, "D_EPM": 0.9},
+        {"Posición": "SG", "Jugador": "CJ McCollum", "Minutos_Esperados": 32.0, "O_EPM": 1.9, "D_EPM": -0.6},
+        {"Posición": "SF", "Jugador": "Brandon Ingram", "Minutos_Esperados": 34.0, "O_EPM": 2.2, "D_EPM": -0.2},
+        {"Posición": "PF", "Jugador": "Herbert Jones", "Minutos_Esperados": 31.0, "O_EPM": 0.2, "D_EPM": 2.9},
+        {"Posición": "C", "Jugador": "Zion Williamson", "Minutos_Esperados": 33.0, "O_EPM": 3.4, "D_EPM": 0.4},
+        {"Posición": "BENCH", "Jugador": "Murphy III / Alvarado / Missi", "Minutos_Esperados": 76.0, "O_EPM": -0.9, "D_EPM": 0.2},
+    ],
+    "SAS": [
+        {"Posición": "PG", "Jugador": "Chris Paul", "Minutos_Esperados": 28.0, "O_EPM": 1.6, "D_EPM": 0.4},
+        {"Posición": "SG", "Jugador": "Devin Vassell", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": 0.1},
+        {"Posición": "SF", "Jugador": "Harrison Barnes", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": -0.4},
+        {"Posición": "PF", "Jugador": "Jeremy Sochan", "Minutos_Esperados": 30.0, "O_EPM": -0.8, "D_EPM": 0.7},
+        {"Posición": "C", "Jugador": "Victor Wembanyama", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 4.5},
+        {"Posición": "BENCH", "Jugador": "Johnson / Castle / Tre Jones", "Minutos_Esperados": 86.0, "O_EPM": -1.4, "D_EPM": -0.1},
+    ],
+}
+
 FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
     ("Detroit Pistons", "Boston Celtics"),
     ("New York Knicks", "Miami Heat"),
@@ -932,6 +1209,7 @@ FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
     ("Portland Trail Blazers", "Utah Jazz"),
 ]
 
+LINEUP_COLS = ["Posición", "Jugador", "Minutos_Esperados", "O_EPM", "D_EPM"]
 ROSTER_EDITOR_COLS = [
     "Team_Abbr",
     "Star1_Name",
@@ -942,6 +1220,319 @@ ROSTER_EDITOR_COLS = [
     "Off_Rtg",
     "Def_Rtg",
 ]
+
+
+# ==============================================================================
+# UTILIDADES DE CARGA LOCAL Y CONVERSIÓN DE CUOTAS (FAIR ODDS)
+# ==============================================================================
+def prob_to_fair_odds(prob: float) -> Tuple[str, str]:
+    """Convierte una probabilidad (0-1) a cuota justa Decimal y Americana."""
+    p = float(np.clip(prob, 0.01, 0.99))
+    dec_odds = 1.0 / p
+    if p >= 0.5:
+        amer = -int(round((p / (1.0 - p)) * 100))
+        amer_str = f"{amer}"
+    else:
+        amer = int(round(((1.0 - p) / p) * 100))
+        amer_str = f"+{amer}"
+    return f"{dec_odds:.2f}", amer_str
+
+
+def round_to_half_point(val: float) -> float:
+    """Redondea cualquier línea proyectada al medio punto (.5) más cercano estilo Sportsbook."""
+    return float(np.floor(val) + 0.5)
+
+
+def load_clean_nba_dataframe(uploaded_file=None) -> Tuple[pd.DataFrame, str]:
+    """Carga el archivo local nba_stats_completo.csv (o el respaldo embebido de 30 equipos)."""
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        return df.copy(), f"Archivo CSV cargado ({len(df)} equipos)"
+
+    candidate_paths = [
+        Path("nba_stats_completo.csv"),
+        Path(__file__).resolve().parent / "nba_stats_completo.csv",
+        Path("/working_dir/c_ff23c4fefe14d05d/artifacts/file_generation/ttl=63d/output/nba_stats_completo.csv"),
+    ]
+    for path in candidate_paths:
+        if path.exists():
+            df = pd.read_csv(path)
+            if len(df) >= 30:
+                return df.copy(), f"Respaldo Local ({path.name} - {len(df)} equipos)"
+
+    df = pd.DataFrame(DEFAULT_CSV_DATA)
+    try:
+        df.to_csv("nba_stats_completo.csv", index=False, encoding="utf-8")
+    except OSError:
+        pass
+    return df.copy(), f"Respaldo Local (nba_stats_completo.csv - {len(df)} equipos)"
+
+
+def build_default_lineups_dict() -> Dict[str, pd.DataFrame]:
+    """Construye el diccionario de DataFrames con los quintetos titulares de las 30 franquicias."""
+    lineups: Dict[str, pd.DataFrame] = {}
+    for abbr, rows in DEFAULT_LINEUPS_30_TEAMS.items():
+        lineups[abbr] = pd.DataFrame(rows)[LINEUP_COLS].copy()
+    return lineups
+
+
+# ==============================================================================
+# 2. FUNCIÓN DE EXTRACCIÓN CACHEADA DESDE NBA_API (@st.cache_data) CON FALLBACK
+# ==============================================================================
+@st.cache_data(ttl=43200, show_spinner=False)
+def _query_nba_api_endpoints(season: str = NBA_SEASON_TARGET) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Descarga en dos consultas únicas cacheadas por 12h (43,200 s):
+    1) Estadísticas avanzadas de los 30 equipos (`LeagueDashTeamStats`, season='2026-27').
+    2) Estadísticas base de todos los jugadores (`LeagueDashPlayerStats`, season='2026-27').
+    Aplica pausa controlada `time.sleep(1.0)` entre peticiones para evitar bloqueos 429.
+    """
+    if not NBA_API_AVAILABLE or LeagueDashTeamStats is None or LeagueDashPlayerStats is None:
+        raise RuntimeError("El paquete nba_api no está disponible en este entorno.")
+
+    NBAStatsHTTP.headers = CUSTOM_HEADERS
+
+    # 1. Consulta única de estadísticas avanzadas de los 30 equipos
+    team_adv_endpoint = LeagueDashTeamStats(
+        season=season,
+        measure_type_detailed_defense="Advanced",
+        per_mode_detailed="PerGame",
+        headers=CUSTOM_HEADERS,
+        timeout=12,
+    )
+    df_team_adv = team_adv_endpoint.get_data_frames()[0]
+
+    # Pausa controlada entre peticiones a stats.nba.com
+    time.sleep(1.0)
+
+    # 2. Consulta única de estadísticas base de jugadores (puntos, minutos, triples, equipo)
+    player_base_endpoint = LeagueDashPlayerStats(
+        season=season,
+        per_mode_detailed="PerGame",
+        headers=CUSTOM_HEADERS,
+        timeout=12,
+    )
+    df_players = player_base_endpoint.get_data_frames()[0]
+
+    if df_team_adv.empty or df_players.empty:
+        raise ValueError(f"NBA.com devolvió tablas vacías para la temporada {season}.")
+
+    return df_team_adv, df_players
+
+
+def sincronizar_datos_nba_api(
+    season: str = NBA_SEASON_TARGET,
+) -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame], str, bool]:
+    """
+    Intenta extraer titulares, estrellas y ratings actualizados desde `nba_api` (temporada '2026-27').
+    Si la API responde con éxito, actualiza `st.session_state.df_nba` y `st.session_state.lineups_nba`.
+    Si falla (Timeout, Error 429 o bloqueo de IP de Streamlit Cloud), muestra `st.warning(...)`
+    y carga sin interrupciones el archivo local `nba_stats_completo.csv`.
+    """
+    base_df, local_label = load_clean_nba_dataframe()
+    base_lineups = build_default_lineups_dict()
+
+    try:
+        df_team_adv, df_players = _query_nba_api_endpoints(season=season)
+
+        updated_df = base_df.copy()
+        updated_lineups = {k: v.copy() for k, v in base_lineups.items()}
+
+        # Mapear métricas avanzadas de equipo desde LeagueDashTeamStats
+        for idx, row in updated_df.iterrows():
+            t_name = str(row["Team"])
+            t_abbr = str(row["Team_Abbr"]).upper()
+
+            team_match = pd.DataFrame()
+            if "TEAM_ABBREVIATION" in df_team_adv.columns:
+                team_match = df_team_adv[df_team_adv["TEAM_ABBREVIATION"].astype(str).str.upper() == t_abbr]
+            if team_match.empty and "TEAM_NAME" in df_team_adv.columns:
+                team_match = df_team_adv[
+                    df_team_adv["TEAM_NAME"].astype(str).str.lower().str.contains(t_name.split()[-1].lower())
+                ]
+
+            if not team_match.empty:
+                tm = team_match.iloc[0]
+                if "PACE" in tm and pd.notna(tm["PACE"]):
+                    updated_df.loc[idx, "Pace"] = round(float(tm["PACE"]), 1)
+                if "OFF_RATING" in tm and pd.notna(tm["OFF_RATING"]):
+                    updated_df.loc[idx, "Off_Rtg"] = round(float(tm["OFF_RATING"]), 1)
+                if "DEF_RATING" in tm and pd.notna(tm["DEF_RATING"]):
+                    updated_df.loc[idx, "Def_Rtg"] = round(float(tm["DEF_RATING"]), 1)
+                if "TM_TOV_PCT" in tm and pd.notna(tm["TM_TOV_PCT"]):
+                    tov_val = float(tm["TM_TOV_PCT"])
+                    updated_df.loc[idx, "TOV_Pct"] = round(tov_val * 100.0 if tov_val < 1.0 else tov_val, 1)
+
+            # Extraer titulares y estrellas de cada equipo desde LeagueDashPlayerStats
+            if "TEAM_ABBREVIATION" in df_players.columns:
+                p_team = df_players[df_players["TEAM_ABBREVIATION"].astype(str).str.upper() == t_abbr].copy()
+                if not p_team.empty and "PTS" in p_team.columns and "MIN" in p_team.columns:
+                    p_team["PTS"] = pd.to_numeric(p_team["PTS"], errors="coerce").fillna(0.0)
+                    p_team["MIN"] = pd.to_numeric(p_team["MIN"], errors="coerce").fillna(0.0)
+
+                    # Actualizar Star1 y Star2 (los 2 líderes anotadores de la franquicia)
+                    top_scorers = p_team.sort_values(by=["PTS", "MIN"], ascending=False)
+                    if len(top_scorers) >= 1:
+                        s1 = top_scorers.iloc[0]
+                        s1_ppg = round(float(s1["PTS"]), 1)
+                        updated_df.loc[idx, "Star1_Name"] = str(s1["PLAYER_NAME"])
+                        updated_df.loc[idx, "Star1_PPG"] = s1_ppg
+                        updated_df.loc[idx, "Star1_Line"] = round_to_half_point(max(0.5, s1_ppg - 0.5))
+                    if len(top_scorers) >= 2:
+                        s2 = top_scorers.iloc[1]
+                        s2_ppg = round(float(s2["PTS"]), 1)
+                        updated_df.loc[idx, "Star2_Name"] = str(s2["PLAYER_NAME"])
+                        updated_df.loc[idx, "Star2_PPG"] = s2_ppg
+                        updated_df.loc[idx, "Star2_Line"] = round_to_half_point(max(0.5, s2_ppg - 0.5))
+
+                    # Actualizar los 5 titulares con más minutos en el quinteto del equipo
+                    top_starters = p_team.sort_values(by=["MIN", "PTS"], ascending=False).head(5)
+                    if len(top_starters) == 5 and t_abbr in updated_lineups:
+                        lu_df = updated_lineups[t_abbr].copy()
+                        starter_mins_sum = 0.0
+                        for s_i in range(5):
+                            pl_row = top_starters.iloc[s_i]
+                            pl_mins = round(float(np.clip(pl_row["MIN"], 18.0, 40.0)), 1)
+                            starter_mins_sum += pl_mins
+                            lu_df.loc[s_i, "Jugador"] = str(pl_row["PLAYER_NAME"])
+                            lu_df.loc[s_i, "Minutos_Esperados"] = pl_mins
+                        lu_df.loc[5, "Minutos_Esperados"] = round(max(40.0, 240.0 - starter_mins_sum), 1)
+                        updated_lineups[t_abbr] = lu_df
+
+        st.session_state.df_nba = updated_df
+        st.session_state.lineups_nba = updated_lineups
+        source_msg = f"NBA.com Live API ({season} Sincronizado)"
+        st.session_state.data_source_label = source_msg
+        st.session_state.nba_api_status = "ONLINE (NBA.com Live)"
+        return updated_df, updated_lineups, source_msg, True
+
+    except Exception as e:
+        st.warning("NBA.com no disponible temporalmente. Operando con base de respaldo local.")
+        st.session_state.df_nba = base_df
+        if "lineups_nba" not in st.session_state:
+            st.session_state.lineups_nba = base_lineups
+        st.session_state.data_source_label = local_label
+        st.session_state.nba_api_status = f"FALLBACK LOCAL ({type(e).__name__})"
+        return base_df, st.session_state.lineups_nba, local_label, False
+
+
+# ==============================================================================
+# MOTOR DE CÁLCULO ASCENDENTE (BOTTOM-UP LINEUP AGGREGATOR)
+# ==============================================================================
+def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[float, float, float]:
+    """
+    Proyecta el Off_Rtg, Def_Rtg y Pace sumando los minutos ponderados y el impacto
+    neto individual (O_EPM y D_EPM) de los 5 titulares más la unidad de banca (240 minutos totales).
+    """
+    df_clean = df_lineup.copy()
+    mins = pd.to_numeric(df_clean["Minutos_Esperados"], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
+    o_epm = pd.to_numeric(df_clean["O_EPM"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    d_epm = pd.to_numeric(df_clean["D_EPM"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    pos_arr = df_clean["Posición"].astype(str).str.upper().to_numpy()
+
+    total_mins = float(np.sum(mins))
+    missing_mins = 0.0
+
+    if total_mins <= 0.0:
+        eff_mins = np.array([32.0, 32.0, 32.0, 32.0, 32.0, 80.0][: len(mins)], dtype=float)
+    elif total_mins < 240.0:
+        missing_mins = 240.0 - total_mins
+        eff_mins = mins.copy()
+    elif total_mins > 240.0:
+        eff_mins = mins * (240.0 / total_mins)
+    else:
+        eff_mins = mins.copy()
+
+    court_slots = eff_mins / 48.0
+    replacement_slots = missing_mins / 48.0
+
+    # Minutos vacantes por lesión/descanso (<240 min) son absorbidos por nivel de reemplazo profundo (O_EPM=-2.2, D_EPM=-1.2)
+    synergy_scale = 0.62
+    team_off_delta = float((np.sum(court_slots * o_epm) + replacement_slots * (-2.2)) * synergy_scale)
+    team_def_delta = float((np.sum(court_slots * d_epm) + replacement_slots * (-1.2)) * synergy_scale)
+
+    proj_off_rtg = float(np.clip(LEAGUE_AVG_ORTG + team_off_delta, 98.0, 132.0))
+    proj_def_rtg = float(np.clip(LEAGUE_AVG_ORTG - team_def_delta, 98.0, 132.0))
+
+    guard_mask = np.isin(pos_arr, ["PG", "SG"])
+    big_mask = np.isin(pos_arr, ["PF", "C"])
+    guard_mins = float(np.sum(eff_mins[guard_mask])) if np.any(guard_mask) else 64.0
+    guard_o_epm = float(np.mean(o_epm[guard_mask])) if np.any(guard_mask) else 0.0
+    big_d_epm = float(np.mean(d_epm[big_mask])) if np.any(big_mask) else 0.0
+
+    pace_guard_boost = ((guard_mins - 65.0) / 12.0) * 0.45
+    pace_style_boost = (guard_o_epm * 0.16) - (big_d_epm * 0.10)
+    proj_pace = float(np.clip(float(pace_base) + pace_guard_boost + pace_style_boost, 88.0, 108.0))
+
+    return round(proj_off_rtg, 1), round(proj_def_rtg, 1), round(proj_pace, 1)
+
+
+def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
+    """
+    Actualiza dinámicamente Off_Rtg, Def_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
+    de la fila del equipo a partir de su quinteto activo antes de correr Monte Carlo.
+    """
+    updated = team_row.copy()
+    pace_base = float(team_row["Pace"])
+    off_rtg, def_rtg, dyn_pace = calcular_ratings_lineup(df_lineup, pace_base)
+
+    updated["Base_Off_Rtg"] = float(team_row["Off_Rtg"])
+    updated["Base_Def_Rtg"] = float(team_row["Def_Rtg"])
+    updated["Base_Pace"] = pace_base
+
+    updated["Off_Rtg"] = off_rtg
+    updated["Def_Rtg"] = def_rtg
+    updated["Pace"] = dyn_pace
+
+    starters_df = df_lineup[df_lineup["Posición"].astype(str).str.upper() != "BENCH"].copy()
+    if not starters_df.empty:
+        starters_df["Minutos_Esperados"] = pd.to_numeric(starters_df["Minutos_Esperados"], errors="coerce").fillna(0.0)
+        starters_df["O_EPM"] = pd.to_numeric(starters_df["O_EPM"], errors="coerce").fillna(0.0)
+
+        for star_idx, default_mins in [(1, 35.0), (2, 33.0)]:
+            s_name = str(updated[f"Star{star_idx}_Name"])
+            base_ppg = float(updated[f"Star{star_idx}_PPG"])
+            match = starters_df[starters_df["Jugador"].astype(str).str.lower() == s_name.lower()]
+
+            if not match.empty:
+                cur_mins = float(match.iloc[0]["Minutos_Esperados"])
+                cur_o_epm = float(match.iloc[0]["O_EPM"])
+                if cur_mins <= 0.5:
+                    active_starters = starters_df[starters_df["Minutos_Esperados"] > 5.0].copy()
+                    other_star_name = str(updated[f"Star{3 - star_idx}_Name"])
+                    active_candidates = active_starters[
+                        active_starters["Jugador"].astype(str).str.lower() != other_star_name.lower()
+                    ].copy()
+                    if not active_candidates.empty:
+                        active_candidates["score"] = active_candidates["Minutos_Esperados"] * (
+                            1.0 + 0.15 * active_candidates["O_EPM"]
+                        )
+                        replacement = active_candidates.sort_values("score", ascending=False).iloc[0]
+                        rep_name = str(replacement["Jugador"])
+                        rep_mins = float(replacement["Minutos_Esperados"])
+                        rep_o_epm = float(replacement["O_EPM"])
+                        rep_ppg = round(max(8.5, (rep_mins * 0.52) + (rep_o_epm * 1.65)), 1)
+                        updated[f"Star{star_idx}_Name"] = rep_name
+                        updated[f"Star{star_idx}_PPG"] = rep_ppg
+                        updated[f"Star{star_idx}_Line"] = float(np.floor(rep_ppg) + 0.5)
+                else:
+                    mins_ratio = cur_mins / default_mins
+                    updated[f"Star{star_idx}_PPG"] = round(max(4.0, base_ppg * mins_ratio + (cur_o_epm * 0.25)), 1)
+            else:
+                active_starters = starters_df.sort_values(
+                    by=["O_EPM", "Minutos_Esperados"], ascending=False
+                )
+                if len(active_starters) >= star_idx:
+                    cand = active_starters.iloc[star_idx - 1]
+                    c_name = str(cand["Jugador"])
+                    c_mins = float(cand["Minutos_Esperados"])
+                    c_oepm = float(cand["O_EPM"])
+                    c_ppg = round(max(8.5, (c_mins * 0.55) + (c_oepm * 1.75)), 1)
+                    updated[f"Star{star_idx}_Name"] = c_name
+                    updated[f"Star{star_idx}_PPG"] = c_ppg
+                    updated[f"Star{star_idx}_Line"] = float(np.floor(c_ppg) + 0.5)
+
+    return updated
 
 
 # ==============================================================================
@@ -970,7 +1561,6 @@ def inject_cyber_quant_css() -> None:
             --border-subtle: rgba(148, 163, 184, 0.14);
         }
 
-        /* Fondo principal Cyber-Quant */
         .stApp {
             background-color: var(--bg-void);
             background-image:
@@ -982,7 +1572,6 @@ def inject_cyber_quant_css() -> None:
             font-family: 'Inter', sans-serif;
         }
 
-        /* Sidebar Glassmorphism */
         section[data-testid="stSidebar"] {
             background: rgba(8, 13, 26, 0.92) !important;
             border-right: 1px solid rgba(0, 245, 212, 0.18);
@@ -993,7 +1582,6 @@ def inject_cyber_quant_css() -> None:
             font-family: 'Inter', sans-serif;
         }
 
-        /* Tipografías Globales */
         h1, h2, h3, .font-orbitron {
             font-family: 'Orbitron', sans-serif !important;
             letter-spacing: 0.06em;
@@ -1099,7 +1687,6 @@ def inject_cyber_quant_css() -> None:
             color: #00F5D4;
         }
 
-        /* Sección Header */
         .section-banner {
             display: flex;
             align-items: center;
@@ -1192,9 +1779,7 @@ def inject_cyber_quant_css() -> None:
             padding: 7px 10px;
         }
 
-        /* =====================================================================
-           VISTA A: TARJETAS DE CUADRÍCULA 3x3 (GRID GLASSMORPHISM CYBER-QUANT)
-           ===================================================================== */
+        /* Tarjetas de Cuadrícula 3x3 (Grid Glassmorphism) */
         .grid-game-card {
             background: linear-gradient(155deg, rgba(14, 22, 44, 0.88) 0%, rgba(8, 13, 26, 0.94) 100%);
             border: 1px solid rgba(0, 245, 212, 0.24);
@@ -1322,9 +1907,7 @@ def inject_cyber_quant_css() -> None:
             font-size: 0.72rem;
         }
 
-        /* =====================================================================
-           VISTA B: EXPEDIENTE DETALLADO Y SCOREBOARD TV HEADER (LOGOS 64PX)
-           ===================================================================== */
+        /* Vista B: Expediente Detallado y Scoreboard TV Header */
         .game-glass-wrapper {
             background: linear-gradient(165deg, rgba(13, 21, 40, 0.86) 0%, rgba(7, 12, 24, 0.94) 100%);
             border: 1px solid rgba(0, 245, 212, 0.26);
@@ -1426,6 +2009,30 @@ def inject_cyber_quant_css() -> None:
             font-weight: 600;
         }
 
+        /* Tarjetas de Resumen Bottom-Up del Quinteto */
+        .lineup-telemetry-box {
+            background: linear-gradient(135deg, rgba(16, 26, 52, 0.88) 0%, rgba(8, 13, 28, 0.94) 100%);
+            border: 1px solid rgba(0, 245, 212, 0.28);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .lineup-metric-pill {
+            background: rgba(5, 8, 17, 0.75);
+            border: 1px solid rgba(148, 163, 184, 0.20);
+            border-radius: 8px;
+            padding: 4px 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.74rem;
+            color: #E2E8F0;
+        }
+
         /* Sub-filas dentro del partido */
         .row-label-bar {
             display: flex;
@@ -1503,7 +2110,6 @@ def inject_cyber_quant_css() -> None:
             margin-left: 6px;
         }
 
-        /* Barra de progreso cuantitativa */
         .quant-bar-track {
             width: 100%;
             height: 8px;
@@ -1524,7 +2130,6 @@ def inject_cyber_quant_css() -> None:
             background: linear-gradient(90deg, #8B5CF6, #F43F5E);
         }
 
-        /* Fila 2: Condiciones de Victoria */
         .win-cond-card {
             background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(9, 14, 28, 0.85) 100%);
             border: 1px solid rgba(16, 185, 129, 0.28);
@@ -1556,7 +2161,6 @@ def inject_cyber_quant_css() -> None:
             color: #94A3B8;
         }
 
-        /* Fila 3: Matchup Táctico PPP */
         .tactical-ppp-box {
             background: rgba(9, 14, 28, 0.82);
             border: 1px solid rgba(56, 189, 248, 0.20);
@@ -1598,7 +2202,6 @@ def inject_cyber_quant_css() -> None:
             border-radius: 999px;
         }
 
-        /* Fila 4: Player Props Cards */
         .prop-player-card {
             background: linear-gradient(150deg, rgba(17, 24, 46, 0.86) 0%, rgba(8, 12, 24, 0.94) 100%);
             border: 1px solid rgba(139, 92, 246, 0.28);
@@ -1628,7 +2231,6 @@ def inject_cyber_quant_css() -> None:
             font-size: 0.96rem;
         }
 
-        /* Estilo para los expanders */
         div[data-testid="stExpander"] {
             background: rgba(11, 18, 35, 0.82);
             border: 1px solid rgba(0, 245, 212, 0.25);
@@ -1665,52 +2267,6 @@ def inject_cyber_quant_css() -> None:
     )
 
 
-# ==============================================================================
-# UTILIDADES DE CARGA DE DATOS Y CONVERSIÓN DE CUOTAS (FAIR ODDS)
-# ==============================================================================
-def prob_to_fair_odds(prob: float) -> Tuple[str, str]:
-    """Convierte una probabilidad (0-1) a cuota justa Decimal y Americana."""
-    p = float(np.clip(prob, 0.01, 0.99))
-    dec_odds = 1.0 / p
-    if p >= 0.5:
-        amer = -int(round((p / (1.0 - p)) * 100))
-        amer_str = f"{amer}"
-    else:
-        amer = int(round(((1.0 - p) / p) * 100))
-        amer_str = f"+{amer}"
-    return f"{dec_odds:.2f}", amer_str
-
-
-def round_to_half_point(val: float) -> float:
-    """Redondea cualquier línea proyectada al medio punto (.5) más cercano estilo Sportsbook."""
-    return float(np.floor(val) + 0.5)
-
-
-def load_clean_nba_dataframe(uploaded_file=None) -> Tuple[pd.DataFrame, str]:
-    """Carga el CSV original limpio nba_stats_completo.csv (30 equipos)."""
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        return df.copy(), f"Archivo CSV cargado ({len(df)} equipos)"
-
-    candidate_paths = [
-        Path("nba_stats_completo.csv"),
-        Path(__file__).resolve().parent / "nba_stats_completo.csv",
-        Path("/working_dir/c_ff23c4fefe14d05d/artifacts/file_generation/ttl=63d/output/nba_stats_completo.csv"),
-    ]
-    for path in candidate_paths:
-        if path.exists():
-            df = pd.read_csv(path)
-            if len(df) >= 30:
-                return df.copy(), f"CSV Oficial ({path.name} - {len(df)} equipos)"
-
-    df = pd.DataFrame(DEFAULT_CSV_DATA)
-    try:
-        df.to_csv("nba_stats_completo.csv", index=False, encoding="utf-8")
-    except OSError:
-        pass
-    return df.copy(), f"Dataset Oficial nba_stats_completo.csv ({len(df)} equipos)"
-
-
 def render_form_pills_html(team_abbr: str) -> str:
     """Genera las pastillas visuales W/L de forma reciente para cada equipo en el Grid 3x3."""
     form_list = TEAM_RECENT_FORM.get(str(team_abbr).upper(), ["W", "L", "W", "L", "W"])
@@ -1741,11 +2297,7 @@ def simulate_player_prop(
     poss_sim: np.ndarray,
 ) -> Dict:
     """
-    Motor de varianza para Player Props:
-    Ajusta la proyección de puntos de la estrella según:
-    1) El ritmo proyectado del partido vs el ritmo habitual del equipo.
-    2) La eficiencia defensiva del rival contra el estilo primario del jugador (ISO o PNR).
-    3) El Def_Rtg global del rival frente a la media NBA.
+    Motor de varianza para Player Props ajustado por el ritmo y la defensa rival.
     """
     n_sims = len(poss_sim)
     pace_factor = exp_pace / max(team_pace, 85.0)
@@ -1759,7 +2311,6 @@ def simulate_player_prop(
 
     adjusted_ppg = base_ppg * pace_factor * style_multiplier * team_def_multiplier
 
-    # Escalamos cada iteración por la fluctuación de posesiones del partido simulado
     iter_pace_scale = poss_sim / exp_pace
     iter_mean = adjusted_ppg * iter_pace_scale
 
@@ -1808,8 +2359,10 @@ def simulate_player_prop(
 
 
 def run_monte_carlo_matchup(
-    away_row: pd.Series,
-    home_row: pd.Series,
+    away_row_raw: pd.Series,
+    home_row_raw: pd.Series,
+    away_lineup: Optional[pd.DataFrame] = None,
+    home_lineup: Optional[pd.DataFrame] = None,
     n_sims: int = 5000,
     hfa_pts: float = 2.5,
     custom_spread_home: Optional[float] = None,
@@ -1817,27 +2370,37 @@ def run_monte_carlo_matchup(
     seed: int = 42,
 ) -> Dict:
     """
-    Ejecuta 5,000 iteraciones de Monte Carlo basadas en posesiones para un partido NBA
-    consumiendo estrictamente las filas vigentes de st.session_state.df_nba.
+    Integra el Motor de Cálculo Ascendente (`calcular_ratings_lineup`) antes de lanzar
+    las 5,000 simulaciones de Monte Carlo basadas en posesiones.
     """
+    away_abbr = str(away_row_raw["Team_Abbr"])
+    home_abbr = str(home_row_raw["Team_Abbr"])
+
+    if away_lineup is None:
+        away_lineup = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[away_abbr])[LINEUP_COLS]
+    if home_lineup is None:
+        home_lineup = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[home_abbr])[LINEUP_COLS]
+
+    away_row = apply_lineup_to_team_row(away_row_raw, away_lineup)
+    home_row = apply_lineup_to_team_row(home_row_raw, home_lineup)
+
     rng = np.random.default_rng(seed)
 
-    # 1. Calcular Posesiones Esperadas (Promedio de Pace de ambos equipos)
     away_pace = float(away_row["Pace"])
     home_pace = float(home_row["Pace"])
     exp_possessions = (away_pace + home_pace) / 2.0
 
-    # 2. Calcular Eficiencia Base (Off_Rtg ajustado contra Def_Rtg rival con regresión NBA)
     away_base_ortg = float(away_row["Off_Rtg"]) + 0.58 * (float(home_row["Def_Rtg"]) - LEAGUE_AVG_ORTG)
     home_base_ortg = float(home_row["Off_Rtg"]) + 0.58 * (float(away_row["Def_Rtg"]) - LEAGUE_AVG_ORTG)
 
-    # Línea de apertura del mercado (basada en ratings macro vigentes)
-    mkt_away_pts = (exp_possessions / 100.0) * away_base_ortg - (hfa_pts / 2.0)
-    mkt_home_pts = (exp_possessions / 100.0) * home_base_ortg + (hfa_pts / 2.0)
+    static_away_ortg = float(away_row["Base_Off_Rtg"]) + 0.58 * (float(home_row["Base_Def_Rtg"]) - LEAGUE_AVG_ORTG)
+    static_home_ortg = float(home_row["Base_Off_Rtg"]) + 0.58 * (float(away_row["Base_Def_Rtg"]) - LEAGUE_AVG_ORTG)
+    static_pace = (float(away_row["Base_Pace"]) + float(home_row["Base_Pace"])) / 2.0
+    mkt_away_pts = (static_pace / 100.0) * static_away_ortg - (hfa_pts / 2.0)
+    mkt_home_pts = (static_pace / 100.0) * static_home_ortg + (hfa_pts / 2.0)
     default_market_spread_home = np.floor(-(mkt_home_pts - mkt_away_pts)) + 0.5
     default_market_total = np.floor(mkt_home_pts + mkt_away_pts) + 0.5
 
-    # Ajuste Táctico Sharp: Estilos (Iso PPP & PnR PPP) + Cuidado de Balón (TOV_Pct)
     away_iso_delta = float(away_row["Iso_PPP_Off"]) - float(home_row["Iso_PPP_Def"])
     away_pnr_delta = float(away_row["PnR_PPP_Off"]) - float(home_row["PnR_PPP_Def"])
     home_iso_delta = float(home_row["Iso_PPP_Off"]) - float(away_row["Iso_PPP_Def"])
@@ -1865,11 +2428,9 @@ def run_monte_carlo_matchup(
         else float(default_market_total)
     )
 
-    # 3. Simulación Monte Carlo de 5,000 iteraciones en NumPy
     poss_sim = rng.normal(loc=exp_possessions, scale=2.75, size=n_sims)
     poss_sim = np.clip(poss_sim, 86.0, 114.0)
 
-    # Varianza de eficiencia por 100 posesiones (mayor 3PA_Rate incrementa la desviación estándar)
     away_ortg_std = 9.2 * (1.0 + 0.35 * (float(away_row["3PA_Rate"]) - 0.38))
     home_ortg_std = 9.2 * (1.0 + 0.35 * (float(home_row["3PA_Rate"]) - 0.38))
 
@@ -1879,7 +2440,6 @@ def run_monte_carlo_matchup(
     away_pts_sim = (poss_sim / 100.0) * away_ortg_sim - (hfa_pts / 2.0)
     home_pts_sim = (poss_sim / 100.0) * home_ortg_sim + (hfa_pts / 2.0)
 
-    # Simulación explícita de triples anotados (3PM) y pérdidas (TOV) correlacionados con la eficiencia
     away_3pa_sim = np.clip(
         rng.normal(poss_sim * float(away_row["3PA_Rate"]) * 0.92, 4.0, size=n_sims),
         18,
@@ -1922,7 +2482,6 @@ def run_monte_carlo_matchup(
         28.0,
     )
 
-    # Resolución de empates en regulación (Prórroga / OT en NBA)
     margin_sim = home_pts_sim - away_pts_sim
     ties_mask = np.abs(margin_sim) < 0.5
     if np.any(ties_mask):
@@ -1934,27 +2493,23 @@ def run_monte_carlo_matchup(
 
     total_pts_sim = home_pts_sim + away_pts_sim
 
-    # Probabilidades Moneyline
     home_win_prob = float(np.mean(margin_sim > 0))
     away_win_prob = 1.0 - home_win_prob
     home_ml_dec, home_ml_amer = prob_to_fair_odds(home_win_prob)
     away_ml_dec, away_ml_amer = prob_to_fair_odds(away_win_prob)
 
-    # Probabilidades de cubrir el Spread (home_pts + spread_line_home > away_pts)
     home_cover_prob = float(np.mean((home_pts_sim + spread_line_home) > away_pts_sim))
     away_cover_prob = 1.0 - home_cover_prob
     home_sp_dec, home_sp_amer = prob_to_fair_odds(home_cover_prob)
     away_sp_dec, away_sp_amer = prob_to_fair_odds(away_cover_prob)
 
-    # Probabilidades de Over / Under
     over_prob = float(np.mean(total_pts_sim > total_line))
     under_prob = 1.0 - over_prob
     over_dec, over_amer = prob_to_fair_odds(over_prob)
     under_dec, under_amer = prob_to_fair_odds(under_prob)
 
-    # Identificación del Favorito y Condiciones de Victoria (Fila 2)
     fav_is_home = home_win_prob >= away_win_prob
-    fav_abbr = str(home_row["Team_Abbr"]) if fav_is_home else str(away_row["Team_Abbr"])
+    fav_abbr = home_abbr if fav_is_home else away_abbr
     fav_name = str(home_row["Team"]) if fav_is_home else str(away_row["Team"])
     fav_base_win = home_win_prob if fav_is_home else away_win_prob
     fav_win_mask = (margin_sim > 0) if fav_is_home else (margin_sim < 0)
@@ -1962,24 +2517,20 @@ def run_monte_carlo_matchup(
     fav_tov_arr = home_tov_sim if fav_is_home else away_tov_sim
     fav_ortg_arr = home_ortg_sim if fav_is_home else away_ortg_sim
 
-    # Umbral de triples (mediana redonda de triples del favorito)
     threepm_threshold = int(np.round(np.percentile(fav_3pm_arr, 52)))
     mask_3pm = fav_3pm_arr > threepm_threshold
     win_given_3pm = float(np.mean(fav_win_mask[mask_3pm])) if np.any(mask_3pm) else fav_base_win
 
-    # Umbral de pérdidas (percentil 48 de TOV del favorito)
     tov_threshold = int(np.round(np.percentile(fav_tov_arr, 48)))
     mask_tov = fav_tov_arr < tov_threshold
     win_given_tov = float(np.mean(fav_win_mask[mask_tov])) if np.any(mask_tov) else fav_base_win
 
-    # Umbral de Eficiencia Ofensiva en el juego
     ortg_threshold = round(float(np.percentile(fav_ortg_arr, 50)), 1)
     mask_ortg = fav_ortg_arr > ortg_threshold
     win_given_ortg = float(np.mean(fav_win_mask[mask_ortg])) if np.any(mask_ortg) else fav_base_win
 
-    # 4. Simulación de Player Props para Star1 y Star2 de ambos equipos (Fila 4)
     props_list = []
-    for side_row, opp_row, is_home_player in [(away_row, home_row, False), (home_row, away_row, True)]:
+    for side_row, opp_row in [(away_row, home_row), (home_row, away_row)]:
         p_team = str(side_row["Team_Abbr"])
         p_opp = str(opp_row["Team_Abbr"])
         t_pace = float(side_row["Pace"])
@@ -2015,16 +2566,16 @@ def run_monte_carlo_matchup(
                 opp_def_rtg=o_def_rtg,
                 poss_sim=poss_sim,
             )
-            prop_res["matchup_label"] = f"{away_row['Team_Abbr']} @ {home_row['Team_Abbr']}"
+            prop_res["matchup_label"] = f"{away_abbr} @ {home_abbr}"
             props_list.append(prop_res)
 
     return {
-        "matchup_id": f"{away_row['Team_Abbr']}@{home_row['Team_Abbr']}",
+        "matchup_id": f"{away_abbr}@{home_abbr}",
         "matchup_title": f"{away_row['Team']} @ {home_row['Team']}",
         "away_team": str(away_row["Team"]),
-        "away_abbr": str(away_row["Team_Abbr"]),
+        "away_abbr": away_abbr,
         "home_team": str(home_row["Team"]),
-        "home_abbr": str(home_row["Team_Abbr"]),
+        "home_abbr": home_abbr,
         "away_row": away_row,
         "home_row": home_row,
         "n_sims": n_sims,
@@ -2199,7 +2750,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
         f"""
         <div class="section-banner">
             <div class="section-banner-title">📡 RADAR EJECUTIVO DE LA JORNADA // TOP SYNDICATE PICKS</div>
-            <div class="section-banner-tag">EVALUANDO {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMULACIONES</div>
+            <div class="section-banner-tag">QUINTETOS EPM ACTIVOS &bull; {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMS</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2287,15 +2838,13 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
 
 def render_slate_grid_3x3(sim_results: List[Dict]) -> None:
     """
-    3. VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
-    Renderiza cada partido con diseño Glassmorphism Cyber-Quant, escudos oficiales de 32px,
-    pastillas W/L, pronóstico rápido de Spread y Total y botón "LEER ANÁLISIS →".
+    VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
     """
     st.markdown(
         f"""
         <div class="section-banner">
             <div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) EN ESCANEO</div>
-            <div class="section-banner-tag">SELECCIONA UN PARTIDO PARA ABRIR SU EXPEDIENTE CUANTITATIVO</div>
+            <div class="section-banner-tag">HAZ CLIC EN "LEER ANÁLISIS &rarr;" PARA EDITAR QUINTETOS Y VER EL EXPEDIENTE</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2309,9 +2858,10 @@ def render_slate_grid_3x3(sim_results: List[Dict]) -> None:
             global_idx = row_start + col_idx
             away_abbr = res["away_abbr"]
             home_abbr = res["home_abbr"]
+            away_row = res["away_row"]
+            home_row = res["home_row"]
             est_time = GAME_SLATE_TIMES[global_idx % len(GAME_SLATE_TIMES)]
 
-            # Línea de Spread proyectada redondeada a .5 para el pronóstico rápido
             proj_spread_half = round_to_half_point(abs(res["proj_spread_home"]) - 0.5)
             if res["proj_spread_home"] <= 0:
                 quick_spread_str = f"{home_abbr} -{proj_spread_half:.1f}"
@@ -2331,15 +2881,15 @@ def render_slate_grid_3x3(sim_results: List[Dict]) -> None:
                     f"""
                     <div class="grid-game-card">
                         <div class="grid-card-top">
-                            <span class="grid-league-badge">NBA &middot; REGULAR SEASON</span>
-                            <span class="grid-time-badge">🕒 {est_time}</span>
+                            <span class="grid-league-badge">NBA &middot; {NBA_SEASON_TARGET}</span>
+                            <span class="grid-time-badge">🕒 {est_time} &bull; PACE {res['exp_possessions']:.1f}</span>
                         </div>
                         <div class="grid-team-row">
                             <div class="grid-team-info">
                                 {away_logo_32}
                                 <div>
                                     <span class="grid-team-abbr">{away_abbr}</span>
-                                    <span class="grid-team-fullname">{res['away_team']}</span>
+                                    <span class="grid-team-fullname">ORTG {away_row['Off_Rtg']:.1f} &middot; DRTG {away_row['Def_Rtg']:.1f}</span>
                                 </div>
                             </div>
                             {away_pills}
@@ -2349,7 +2899,7 @@ def render_slate_grid_3x3(sim_results: List[Dict]) -> None:
                                 {home_logo_32}
                                 <div>
                                     <span class="grid-team-abbr">{home_abbr}</span>
-                                    <span class="grid-team-fullname">{res['home_team']}</span>
+                                    <span class="grid-team-fullname">ORTG {home_row['Off_Rtg']:.1f} &middot; DRTG {home_row['Def_Rtg']:.1f}</span>
                                 </div>
                             </div>
                             {home_pills}
@@ -2376,6 +2926,68 @@ def render_slate_grid_3x3(sim_results: List[Dict]) -> None:
                     st.rerun()
 
 
+def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: float, key_prefix: str) -> None:
+    """
+    GESTOR INTERACTIVO DE QUINTETOS (st.data_editor)
+    Despliega la tabla editable ['Posición', 'Jugador', 'Minutos_Esperados', 'O_EPM', 'D_EPM']
+    y recalcula en tiempo real el Off_Rtg, Def_Rtg y Pace mediante `calcular_ratings_lineup`.
+    """
+    current_lineup = st.session_state.lineups_nba[team_abbr][LINEUP_COLS].copy()
+    proj_off, proj_def, proj_pace = calcular_ratings_lineup(current_lineup, pace_base)
+    total_mins = float(pd.to_numeric(current_lineup["Minutos_Esperados"], errors="coerce").fillna(0.0).sum())
+
+    st.markdown(
+        f"""
+        <div class="lineup-telemetry-box">
+            <div style="display:flex; align-items:center;">
+                {escudo_nba_html(team_abbr, 32)}
+                <div>
+                    <div style="font-family:'Orbitron',sans-serif; font-size:0.92rem; font-weight:800; color:#F8FAFC;">
+                        QUINTETO {team_name.upper()} ({team_abbr})
+                    </div>
+                    <div style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; color:#94A3B8;">
+                        Minutos Asignados: <strong>{total_mins:.0f} / 240 min</strong> (Ajuste automático de banca)
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <span class="lineup-metric-pill">ORTG: <strong style="color:#00F5D4;">{proj_off:.1f}</strong></span>
+                <span class="lineup-metric-pill">DRTG: <strong style="color:#38BDF8;">{proj_def:.1f}</strong></span>
+                <span class="lineup-metric-pill">PACE: <strong style="color:#F59E0B;">{proj_pace:.1f}</strong></span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    v_key = st.session_state.lineup_editor_version
+    edited_lineup = st.data_editor(
+        current_lineup,
+        key=f"{key_prefix}_lineup_editor_{team_abbr}_{v_key}",
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        disabled=["Posición"],
+        column_config={
+            "Posición": st.column_config.TextColumn("Posición", width="small"),
+            "Jugador": st.column_config.TextColumn("Jugador (Titular / Rotación)", width="medium"),
+            "Minutos_Esperados": st.column_config.NumberColumn(
+                "Minutos_Esperados", min_value=0.0, max_value=48.0, step=1.0, format="%.1f"
+            ),
+            "O_EPM": st.column_config.NumberColumn(
+                "O_EPM", min_value=-8.0, max_value=10.0, step=0.1, format="%+.1f"
+            ),
+            "D_EPM": st.column_config.NumberColumn(
+                "D_EPM", min_value=-8.0, max_value=10.0, step=0.1, format="%+.1f"
+            ),
+        },
+    )
+
+    if not edited_lineup.equals(current_lineup):
+        st.session_state.lineups_nba[team_abbr] = edited_lineup[LINEUP_COLS].copy()
+        st.rerun()
+
+
 def format_edge_badge(delta_ppp: float) -> str:
     if delta_ppp >= 0.05:
         return f'<span class="edge-pill-pos">SHARP EDGE {delta_ppp:+.2f} PPP</span>'
@@ -2386,9 +2998,9 @@ def format_edge_badge(delta_ppp: float) -> str:
 
 def render_detailed_matchup_dossier(res: Dict) -> None:
     """
-    4. VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO
-    Despliega el Scoreboard TV Header con logos oficiales de 64px y las 4 filas
-    del análisis cuantitativo de 5,000 simulaciones de Monte Carlo.
+    VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO
+    Incluye el Gestor Interactivo de Quintetos (Visitante y Local) lado a lado,
+    el Scoreboard TV Header con logos oficiales de 64px y las 4 filas de Monte Carlo.
     """
     away_abbr = res["away_abbr"]
     home_abbr = res["home_abbr"]
@@ -2411,7 +3023,37 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
     )
     mkt_spread_str = f"{home_abbr} {res['spread_line_home']:+.1f}"
 
-    # Scoreboard TV Header con Logos Oficiales ESPN en 64px
+    st.markdown(
+        """
+        <div class="section-banner">
+            <div class="section-banner-title">♟️ GESTOR INTERACTIVO DE QUINTETOS TITULARES (BOTTOM-UP EPM AGGREGATOR)</div>
+            <div class="section-banner-tag">EDITA JUGADORES, MINUTOS (0 = BAJA/DESCANSO) U O_EPM / D_EPM EN VIVO</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    lu_c1, lu_c2 = st.columns(2)
+    with lu_c1:
+        render_team_lineup_editor_panel(
+            team_name=res["away_team"],
+            team_abbr=away_abbr,
+            pace_base=float(away_row["Base_Pace"]),
+            key_prefix="detail_away",
+        )
+    with lu_c2:
+        render_team_lineup_editor_panel(
+            team_name=res["home_team"],
+            team_abbr=home_abbr,
+            pace_base=float(home_row["Base_Pace"]),
+            key_prefix="detail_home",
+        )
+
+    away_ortg_diff = float(away_row["Off_Rtg"]) - float(away_row["Base_Off_Rtg"])
+    away_drtg_diff = float(away_row["Def_Rtg"]) - float(away_row["Base_Def_Rtg"])
+    home_ortg_diff = float(home_row["Off_Rtg"]) - float(home_row["Base_Off_Rtg"])
+    home_drtg_diff = float(home_row["Def_Rtg"]) - float(home_row["Base_Def_Rtg"])
+
     st.markdown(
         f"""
         <div class="game-glass-wrapper">
@@ -2423,10 +3065,10 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
                     <div>
                         <div class="sb-team-name">{res['away_team']} <span style="font-size:0.72rem; color:#94A3B8;">(AWAY &bull; {away_div.upper()})</span></div>
                         <div class="sb-team-metrics">
-                            ORTG: <strong>{away_row['Off_Rtg']:.1f}</strong> | DRTG: <strong>{away_row['Def_Rtg']:.1f}</strong> | PACE: <strong>{away_row['Pace']:.1f}</strong> | 3PA: <strong>{away_row['3PA_Rate']*100:.1f}%</strong>
+                            ORTG QUINTETO: <strong style="color:#00F5D4;">{away_row['Off_Rtg']:.1f} ({away_ortg_diff:+.1f})</strong> | DRTG: <strong style="color:#38BDF8;">{away_row['Def_Rtg']:.1f} ({away_drtg_diff:+.1f})</strong> | PACE: <strong>{away_row['Pace']:.1f}</strong>
                         </div>
                         <div class="sb-team-metrics" style="color:#CBD5E1;">
-                            Estrellas: <strong>{away_row['Star1_Name']} ({away_row['Star1_PPG']:.1f})</strong> &bull; <strong>{away_row['Star2_Name']} ({away_row['Star2_PPG']:.1f})</strong>
+                            Líderes Activos: <strong>{away_row['Star1_Name']} ({away_row['Star1_PPG']:.1f})</strong> &bull; <strong>{away_row['Star2_Name']} ({away_row['Star2_PPG']:.1f})</strong>
                         </div>
                     </div>
                 </div>
@@ -2448,10 +3090,10 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
                     <div>
                         <div class="sb-team-name"><span style="font-size:0.72rem; color:#00F5D4;">(HOME &bull; {home_div.upper()})</span> {res['home_team']}</div>
                         <div class="sb-team-metrics">
-                            ORTG: <strong>{home_row['Off_Rtg']:.1f}</strong> | DRTG: <strong>{home_row['Def_Rtg']:.1f}</strong> | PACE: <strong>{home_row['Pace']:.1f}</strong> | 3PA: <strong>{home_row['3PA_Rate']*100:.1f}%</strong>
+                            ORTG QUINTETO: <strong style="color:#00F5D4;">{home_row['Off_Rtg']:.1f} ({home_ortg_diff:+.1f})</strong> | DRTG: <strong style="color:#38BDF8;">{home_row['Def_Rtg']:.1f} ({home_drtg_diff:+.1f})</strong> | PACE: <strong>{home_row['Pace']:.1f}</strong>
                         </div>
                         <div class="sb-team-metrics" style="color:#CBD5E1;">
-                            Estrellas: <strong>{home_row['Star1_Name']} ({home_row['Star1_PPG']:.1f})</strong> &bull; <strong>{home_row['Star2_Name']} ({home_row['Star2_PPG']:.1f})</strong>
+                            Líderes Activos: <strong>{home_row['Star1_Name']} ({home_row['Star1_PPG']:.1f})</strong> &bull; <strong>{home_row['Star2_Name']} ({home_row['Star2_PPG']:.1f})</strong>
                         </div>
                     </div>
                     <div class="team-logo-box-64" style="background: linear-gradient(135deg, {home_c1}55, {home_c2}33); border: 1px solid {home_c2};">
@@ -2463,9 +3105,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
         unsafe_allow_html=True,
     )
 
-    # ------------------------------------------------------------------
     # FILA 1: RESUMEN DE SIMULACIÓN (5,000 ITERACIONES)
-    # ------------------------------------------------------------------
     st.markdown(
         f"""
         <div class="row-label-bar">
@@ -2580,9 +3220,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
             unsafe_allow_html=True,
         )
 
-    # ------------------------------------------------------------------
     # FILA 2: "CÓMO GANA EL FAVORITO" (CONDICIONES DE VICTORIA)
-    # ------------------------------------------------------------------
     delta_3pm = (res["win_given_3pm"] - res["fav_base_win"]) * 100
     delta_tov = (res["win_given_tov"] - res["fav_base_win"]) * 100
     delta_ortg = (res["win_given_ortg"] - res["fav_base_win"]) * 100
@@ -2646,9 +3284,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
             unsafe_allow_html=True,
         )
 
-    # ------------------------------------------------------------------
     # FILA 3: MATCHUP TÁCTICO SYNERGY (ISO PPP & PNR PPP VS DEFENSA RIVAL)
-    # ------------------------------------------------------------------
     st.markdown(
         """
         <div class="row-label-bar" style="border-left-color: #38BDF8;">
@@ -2716,13 +3352,11 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
             unsafe_allow_html=True,
         )
 
-    # ------------------------------------------------------------------
-    # FILA 4: PLAYER PROPS LEANS (ESTRELLAS VIGENTES DE st.session_state.df_nba)
-    # ------------------------------------------------------------------
+    # FILA 4: PLAYER PROPS LEANS (SINCRONIZADO CON QUINTETO Y MINUTOS)
     st.markdown(
         """
         <div class="row-label-bar" style="border-left-color: #8B5CF6;">
-            <span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (SINCRONIZADO EN VIVO CON ROSTER EDITOR)</span>
+            <span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (SINCRONIZADO CON QUINTETOS Y MINUTOS ESPERADOS)</span>
             <span class="row-label-sub">SIMULACIÓN INDIVIDUAL AJUSTADA POR ESTILO DE DEFENSA RIVAL (ISO / PNR)</span>
         </div>
         """,
@@ -2763,13 +3397,16 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
 
 
 # ==============================================================================
-# 2. GESTIÓN DE ROSTER Y PERSISTENCIA EN SESIÓN (st.session_state + st.data_editor)
+# GESTIÓN DE ESTADO REACTIVO (NBA_API, QUINTETOS EPM, ROSTERS Y NAVEGACIÓN)
 # ==============================================================================
 def init_session_state() -> None:
+    if "lineups_nba" not in st.session_state:
+        st.session_state.lineups_nba = build_default_lineups_dict()
     if "df_nba" not in st.session_state:
-        clean_df, source_label = load_clean_nba_dataframe()
-        st.session_state.df_nba = clean_df
-        st.session_state.data_source_label = source_label
+        # Intento inicial silencioso desde caché o respaldo local
+        sincronizar_datos_nba_api(season=NBA_SEASON_TARGET)
+    if "lineup_editor_version" not in st.session_state:
+        st.session_state.lineup_editor_version = 0
     if "roster_editor_version" not in st.session_state:
         st.session_state.roster_editor_version = 0
     if "nba_partido_activo" not in st.session_state:
@@ -2785,29 +3422,26 @@ def init_session_state() -> None:
 
 
 def keep_config_open() -> None:
-    """Abre el configurador de cruces y vuelve a la Cartelera cuando cambia el número de juegos."""
     st.session_state.config_expanded = True
     st.session_state.nba_partido_activo = None
 
 
 def reopen_config_panel() -> None:
-    """Permite abrir el configurador de cruces con un clic."""
     st.session_state.config_expanded = True
     st.session_state.nba_partido_activo = None
 
 
-def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
-    """
-    Sincroniza cualquier edición de nombres, PPG, Pace, Off_Rtg o Def_Rtg realizada en
-    st.data_editor directamente sobre st.session_state.df_nba y ajusta las líneas
-    de Player Props cuando el usuario cambia un jugador o su PPG base.
-    """
-    master_df = st.session_state.df_nba.copy()
+def reset_all_lineups() -> None:
+    st.session_state.lineups_nba = build_default_lineups_dict()
+    st.session_state.lineup_editor_version += 1
 
+
+def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
+    """Sincroniza ediciones realizadas en el Gestor Global de Rosters con st.session_state.df_nba."""
+    master_df = st.session_state.df_nba.copy()
     for idx in edited_subset.index:
         if idx not in master_df.index:
             continue
-
         old_s1_name = str(master_df.loc[idx, "Star1_Name"])
         old_s1_ppg = float(master_df.loc[idx, "Star1_PPG"])
         old_s2_name = str(master_df.loc[idx, "Star2_Name"])
@@ -2821,7 +3455,6 @@ def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
         for col in ROSTER_EDITOR_COLS:
             master_df.loc[idx, col] = edited_subset.loc[idx, col]
 
-        # Si el usuario editó la estrella o su PPG por traspaso/lesión, actualizamos su línea vigente
         if new_s1_name != old_s1_name or abs(new_s1_ppg - old_s1_ppg) > 1e-4:
             master_df.loc[idx, "Star1_Line"] = round_to_half_point(max(0.5, new_s1_ppg - 0.5))
         if new_s2_name != old_s2_name or abs(new_s2_ppg - old_s2_ppg) > 1e-4:
@@ -2831,17 +3464,14 @@ def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
 
 
 def render_live_roster_manager() -> None:
-    """
-    Renderiza el st.expander('⚙️ Gestor de Roster & Traspasos (Live Trades / Injuries)', expanded=False)
-    con st.data_editor sincronizado en tiempo real con st.session_state.df_nba y botón de restablecimiento.
-    """
-    with st.expander("⚙️ Gestor de Roster & Traspasos (Live Trades / Injuries)", expanded=False):
+    """Renderiza el Gestor de Roster & Traspasos (st.data_editor) para las 30 franquicias."""
+    with st.expander("⚙️ Gestor de Roster & Traspasos (Live Trades / Injuries - 30 Equipos)", expanded=False):
         top_c1, top_c2 = st.columns([3.4, 1.2])
         with top_c1:
             st.markdown(
                 """
                 <div style="font-family:'JetBrains Mono',monospace; font-size:0.77rem; color:#CBD5E1; margin-bottom:6px;">
-                    Edita en vivo bajas por lesión, traspasos de último minuto, minutos/PPG proyectados (`Star1_PPG`, `Star2_PPG`) o ajustes de ritmo y eficiencia (`Pace`, `Off_Rtg`, `Def_Rtg`). Tanto el motor Monte Carlo de 5,000 posesiones como los Player Props se recalculan instantáneamente con estos valores.
+                    Edita en vivo bajas, traspasos, PPG de estrellas (`Star1_PPG`, `Star2_PPG`) o métricas base (`Pace`, `Off_Rtg`, `Def_Rtg`) en `st.session_state.df_nba`.
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -2850,8 +3480,10 @@ def render_live_roster_manager() -> None:
             if st.button("🔄 Restablecer Roster Oficial", use_container_width=True):
                 clean_df, src_label = load_clean_nba_dataframe()
                 st.session_state.df_nba = clean_df
+                st.session_state.lineups_nba = build_default_lineups_dict()
                 st.session_state.data_source_label = src_label
                 st.session_state.roster_editor_version += 1
+                st.session_state.lineup_editor_version += 1
                 st.rerun()
 
         current_subset = st.session_state.df_nba[ROSTER_EDITOR_COLS].copy()
@@ -2873,13 +3505,13 @@ def render_live_roster_manager() -> None:
                     "Star2 PPG", min_value=0.0, max_value=60.0, step=0.5, format="%.1f"
                 ),
                 "Pace": st.column_config.NumberColumn(
-                    "Pace (48m)", min_value=85.0, max_value=115.0, step=0.2, format="%.1f"
+                    "Pace Base", min_value=85.0, max_value=115.0, step=0.2, format="%.1f"
                 ),
                 "Off_Rtg": st.column_config.NumberColumn(
-                    "Off_Rtg", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"
+                    "Off_Rtg Base", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"
                 ),
                 "Def_Rtg": st.column_config.NumberColumn(
-                    "Def_Rtg", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"
+                    "Def_Rtg Base", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"
                 ),
             },
         )
@@ -2896,7 +3528,7 @@ def main() -> None:
     inject_cyber_quant_css()
     init_session_state()
 
-    # Sidebar: Parámetros Globales del Motor y Control Dinámico de Cantidad de Juegos
+    # Sidebar: Control de Sincronización con NBA.com y Parámetros del Motor
     with st.sidebar:
         st.markdown(
             """
@@ -2904,11 +3536,22 @@ def main() -> None:
                 ⚡ SHARP SYNDICATE
             </div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">
-                NBA 30-TEAM MONTE CARLO ENGINE v6.0
+                NBA_API LIVE + EPM ENGINE v8.0
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        # 3. CONTROL EN LA INTERFAZ: Botón explícito para forzar sincronización con NBA.com
+        st.markdown("### 🌐 CONEXIÓN NBA.COM API")
+        if st.button("🔄 Forzar Sincronización con NBA.com", use_container_width=True):
+            st.cache_data.clear()
+            with st.spinner(f"Descargando telemetría oficial desde stats.nba.com (Temporada {NBA_SEASON_TARGET})..."):
+                _, _, _, sync_ok = sincronizar_datos_nba_api(season=NBA_SEASON_TARGET)
+                st.session_state.roster_editor_version += 1
+                st.session_state.lineup_editor_version += 1
+                if sync_ok:
+                    st.success(f"Sincronización exitosa con NBA.com ({NBA_SEASON_TARGET}).")
 
         uploaded_csv = st.file_uploader(
             "Cargar nba_stats_completo.csv (Opcional)",
@@ -2920,7 +3563,6 @@ def main() -> None:
             st.session_state.df_nba = custom_df
             st.session_state.data_source_label = custom_label
 
-        # Consumir estrictamente st.session_state.df_nba
         df_teams = st.session_state.df_nba
         team_list = df_teams["Team"].tolist()
 
@@ -2938,6 +3580,12 @@ def main() -> None:
         st.button(
             "🎛️ Configurar Cruces de Hoy",
             on_click=reopen_config_panel,
+            use_container_width=True,
+        )
+
+        st.button(
+            "🔄 Restablecer Todos los Quintetos",
+            on_click=reset_all_lineups,
             use_container_width=True,
         )
 
@@ -2969,7 +3617,8 @@ def main() -> None:
         )
 
         st.markdown("---")
-        st.caption(f"📂 Fuente activa: {st.session_state.data_source_label}")
+        st.caption(f"📂 Fuente activa: {st.session_state.get('data_source_label', 'Respaldo Local')}")
+        st.caption(f"📡 Estado NBA_API: {st.session_state.get('nba_api_status', 'Listo')}")
 
     # Scoreboard TV Header Principal
     st.markdown(
@@ -2977,33 +3626,32 @@ def main() -> None:
         <div class="tv-master-header">
             <div class="tv-top-bar">
                 <div class="syndicate-badge">
-                    <span class="pulse-dot"></span> SHARP SYNDICATE // LIVE ROSTER &amp; 3x3 GRID SCANNER
+                    <span class="pulse-dot"></span> SHARP SYNDICATE // NBA_API ({NBA_SEASON_TARGET}) + BOTTOM-UP LINEUP EPM
                 </div>
                 <div class="font-mono" style="font-size:0.76rem; color:#94A3B8;">
-                    ENGINE STATUS: <strong style="color:#00F5D4;">ONLINE</strong> &nbsp;|&nbsp;
+                    SOURCE: <strong style="color:#00F5D4;">{st.session_state.get('nba_api_status', 'LOCAL BACKUP')}</strong> &nbsp;|&nbsp;
                     SIMULATIONS: <strong style="color:#F8FAFC;">{n_sims:,} / GAME</strong> &nbsp;|&nbsp;
                     HFA: <strong style="color:#38BDF8;">+{hfa_pts:.1f} PTS</strong>
                 </div>
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
             <div class="tv-subtitle">
-                Cartelera interactiva 3x3 con escudos oficiales ESPN HD, Gestor de Rosters y Traspasos en Vivo (<code>st.data_editor</code>) y motor Monte Carlo de 5,000 posesiones.
+                Sincronización blindada con <code>nba_api</code> (Temporada {NBA_SEASON_TARGET}, caché 12h + fallback instantáneo a CSV local), motor ascendente de quintetos EPM y cuadrícula interactiva 3x3.
             </div>
             <div class="tv-telemetry-strip">
-                <div class="telemetry-pill">FRANQUICIAS EN SESIÓN: <strong>{len(df_teams)} / 30</strong></div>
+                <div class="telemetry-pill">TEMPORADA OBJETIVO: <strong>{NBA_SEASON_TARGET} (30 EQUIPOS)</strong></div>
                 <div class="telemetry-pill">CARTELERA ACTIVA: <strong>{num_games} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{num_games * n_sims:,}</strong></div>
-                <div class="telemetry-pill">VISTA ACTUAL: <strong>{"EXPEDIENTE DETALLADO" if st.session_state.nba_partido_activo else "CARTELERA GRID 3x3"}</strong></div>
+                <div class="telemetry-pill">FUENTE EN MEMORIA: <strong>{st.session_state.get('data_source_label', 'nba_stats_completo.csv')}</strong></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Panel de Edición en Vivo de Rosters, Traspasos y Bajas (disponible en ambas vistas)
+    # Gestor Global de Rosters y Traspasos en Vivo
     render_live_roster_manager()
 
-    # Sincronizar lista activa de partidos con num_games
     df_teams = st.session_state.df_nba
     team_list = df_teams["Team"].tolist()
 
@@ -3018,9 +3666,29 @@ def main() -> None:
     # NAVEGACIÓN PRINCIPAL: VISTA A (GRID 3x3) vs VISTA B (EXPEDIENTE DETALLADO)
     # ==========================================================================
     if st.session_state.nba_partido_activo is None:
-        # ----------------------------------------------------------------------
-        # VISTA A: SELECTOR DE CRUCES + RADAR EJECUTIVO + CARTELERA EN CUADRÍCULA 3x3
-        # ----------------------------------------------------------------------
+        with st.expander("♟️ Laboratorio Táctico de Quintetos Titulares (30 Franquicias - O_EPM / D_EPM)", expanded=False):
+            q_col1, q_col2 = st.columns([2.5, 1.5])
+            with q_col1:
+                chosen_team_for_lineup = st.selectbox(
+                    "Selecciona una franquicia para editar su Quinteto Titular y Rotación (240 min):",
+                    options=team_list,
+                    index=0,
+                )
+            with q_col2:
+                st.write("")
+                if st.button("🔄 Restablecer Quintetos Base (30 Equipos)", key="btn_reset_global_lineups", use_container_width=True):
+                    reset_all_lineups()
+                    st.rerun()
+
+            chosen_row = df_teams[df_teams["Team"] == chosen_team_for_lineup].iloc[0]
+            chosen_abbr = str(chosen_row["Team_Abbr"])
+            render_team_lineup_editor_panel(
+                team_name=chosen_team_for_lineup,
+                team_abbr=chosen_abbr,
+                pace_base=float(chosen_row["Pace"]),
+                key_prefix="global_lab",
+            )
+
         with st.expander(
             f"🎛️ CONFIGURADOR DINÁMICO DE CRUCES ({num_games} JUEGO{'S' if num_games > 1 else ''} EN LA CARTELERA DE HOY)",
             expanded=st.session_state.config_expanded,
@@ -3028,7 +3696,7 @@ def main() -> None:
             st.markdown(
                 f"""
                 <div style="font-family:'JetBrains Mono',monospace; font-size:0.78rem; color:#CBD5E1; margin-bottom:10px;">
-                    Elige el equipo <strong>Visitante (Away)</strong> y <strong>Local (Home)</strong> de entre las <strong>30 franquicias NBA</strong> para cada uno de los <strong>{num_games}</strong> juegos. Al pulsar el botón de escanear, este panel se colapsará automáticamente y actualizará la cuadrícula 3x3.
+                    Elige el equipo <strong>Visitante (Away)</strong> y <strong>Local (Home)</strong> de entre las <strong>30 franquicias NBA</strong> para cada uno de los <strong>{num_games}</strong> juegos. Al pulsar el botón de escanear, este panel se colapsará automáticamente y correrá <strong>calcular_ratings_lineup()</strong> antes de las 5,000 simulaciones.
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -3036,7 +3704,7 @@ def main() -> None:
 
             with st.form("dynamic_slate_form", clear_on_submit=False):
                 form_selections: List[Tuple[str, str]] = []
-                form_custom_lines: Dict[int, Tuple[ Optional[float], Optional[float] ]] = {}
+                form_custom_lines: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
 
                 for i in range(num_games):
                     default_away, default_home = FULL_30_TEAM_SLATE[i % len(FULL_30_TEAM_SLATE)]
@@ -3122,16 +3790,19 @@ def main() -> None:
             st.info("Configura al menos un partido válido para visualizar la Cartelera NBA.")
             return
 
-        # Ejecutar las 5,000 simulaciones consumiendo estrictamente st.session_state.df_nba
         sim_results: List[Dict] = []
         for idx, (away_name, home_name) in enumerate(selected_matchups):
-            away_row = df_teams[df_teams["Team"] == away_name].iloc[0]
-            home_row = df_teams[df_teams["Team"] == home_name].iloc[0]
+            away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
+            home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
+            away_abbr = str(away_row_raw["Team_Abbr"])
+            home_abbr = str(home_row_raw["Team_Abbr"])
             c_sp, c_tot = st.session_state.active_custom_lines.get(idx, (None, None))
 
             res = run_monte_carlo_matchup(
-                away_row=away_row,
-                home_row=home_row,
+                away_row_raw=away_row_raw,
+                home_row_raw=home_row_raw,
+                away_lineup=st.session_state.lineups_nba[away_abbr],
+                home_lineup=st.session_state.lineups_nba[home_abbr],
                 n_sims=n_sims,
                 hfa_pts=hfa_pts,
                 custom_spread_home=c_sp,
@@ -3140,23 +3811,18 @@ def main() -> None:
             )
             sim_results.append(res)
 
-        # Renderizar Radar Ejecutivo de la Jornada
         radar_picks = extract_executive_radar(sim_results)
         render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
-
-        # Renderizar Cartelera en Cuadrícula (Grid de 3 Columnas)
         render_slate_grid_3x3(sim_results)
 
     else:
-        # ----------------------------------------------------------------------
         # VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO DEL PARTIDO SELECCIONADO
-        # ----------------------------------------------------------------------
         active_info = st.session_state.nba_partido_activo
         game_idx = int(active_info.get("idx", 0))
         away_name = str(active_info["away_team"])
         home_name = str(active_info["home_team"])
 
-        nav_c1, nav_c2 = st.columns([1.4, 3.6])
+        nav_c1, nav_c2, nav_c3 = st.columns([1.4, 2.5, 1.1])
         with nav_c1:
             if st.button("← Volver a la Cartelera NBA", key="top_back_to_grid_btn", use_container_width=True):
                 st.session_state.nba_partido_activo = None
@@ -3165,20 +3831,31 @@ def main() -> None:
             st.markdown(
                 f"""
                 <div style="display:flex; align-items:center; height:38px; font-family:'JetBrains Mono',monospace; font-size:0.80rem; color:#00F5D4;">
-                    📂 EXPEDIENTE ACTIVO: <strong style="color:#F8FAFC; margin-left:8px;">{away_name.upper()} @ {home_name.upper()}</strong> &nbsp;|&nbsp; Datos sincronizados en vivo con <code>st.session_state.df_nba</code>
+                    📂 EXPEDIENTE ACTIVO: <strong style="color:#F8FAFC; margin-left:8px;">{away_name.upper()} @ {home_name.upper()}</strong>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+        with nav_c3:
+            if st.button("🔄 Reset Quintetos del Juego", key="reset_matchup_lineups_btn", use_container_width=True):
+                a_abbr = str(df_teams[df_teams["Team"] == away_name].iloc[0]["Team_Abbr"])
+                h_abbr = str(df_teams[df_teams["Team"] == home_name].iloc[0]["Team_Abbr"])
+                st.session_state.lineups_nba[a_abbr] = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[a_abbr])[LINEUP_COLS].copy()
+                st.session_state.lineups_nba[h_abbr] = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[h_abbr])[LINEUP_COLS].copy()
+                st.session_state.lineup_editor_version += 1
+                st.rerun()
 
-        # Consumir estrictamente st.session_state.df_nba para recalcular con cualquier cambio en vivo
-        away_row = df_teams[df_teams["Team"] == away_name].iloc[0]
-        home_row = df_teams[df_teams["Team"] == home_name].iloc[0]
+        away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
+        home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
+        away_abbr = str(away_row_raw["Team_Abbr"])
+        home_abbr = str(home_row_raw["Team_Abbr"])
         c_sp, c_tot = st.session_state.active_custom_lines.get(game_idx, (None, None))
 
         detailed_res = run_monte_carlo_matchup(
-            away_row=away_row,
-            home_row=home_row,
+            away_row_raw=away_row_raw,
+            home_row_raw=home_row_raw,
+            away_lineup=st.session_state.lineups_nba[away_abbr],
+            home_lineup=st.session_state.lineups_nba[home_abbr],
             n_sims=n_sims,
             hfa_pts=hfa_pts,
             custom_spread_home=c_sp,
