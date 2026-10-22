@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,6 +21,27 @@ LEAGUE_AVG_PACE = 99.0
 LEAGUE_AVG_ISO_PPP = 1.03
 LEAGUE_AVG_PNR_PPP = 1.04
 LEAGUE_AVG_TOV = 13.1
+
+# ==============================================================================
+# 1. DICCIONARIO Y CDN OFICIAL DE LOGOS (ESPN CDN)
+# ==============================================================================
+URL_NBA_LOGOS = "https://a.espncdn.com/i/teamlogos/nba/500/{}.png"
+
+NBA_TEAMS = [
+    "ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+    "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+    "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS",
+]
+
+
+def escudo_nba_html(team_abbr: str, size: int = 32) -> str:
+    abbr = str(team_abbr).strip().upper()
+    url = f"https://a.espncdn.com/i/teamlogos/nba/500/{abbr.lower()}.png"
+    return (
+        f'<img src="{url}" width="{size}" height="{size}" '
+        f'style="object-fit: contain; vertical-align: middle; margin-right: 8px;">'
+    )
+
 
 # Paleta oficial de colores neón/institucional para las 30 franquicias NBA
 TEAM_COLORS: Dict[str, Tuple[str, str]] = {
@@ -61,6 +82,46 @@ TEAM_COLORS: Dict[str, Tuple[str, str]] = {
     "NOP": ("#0C2340", "#C8102E"),
     "SAS": ("#000000", "#C4CED4"),
 }
+
+# Racha reciente de forma (Últimos 5 juegos) para las pastillas W/L de la Cartelera
+TEAM_RECENT_FORM: Dict[str, List[str]] = {
+    "BOS": ["W", "W", "W", "L", "W"],
+    "BKN": ["L", "W", "L", "L", "W"],
+    "NYK": ["W", "W", "L", "W", "W"],
+    "PHI": ["W", "L", "W", "W", "L"],
+    "TOR": ["L", "L", "W", "L", "L"],
+    "CHI": ["W", "L", "L", "W", "L"],
+    "CLE": ["W", "W", "W", "W", "L"],
+    "DET": ["L", "L", "L", "W", "L"],
+    "IND": ["W", "W", "L", "W", "L"],
+    "MIL": ["W", "L", "W", "W", "W"],
+    "DEN": ["W", "W", "W", "L", "W"],
+    "MIN": ["W", "L", "W", "W", "W"],
+    "OKC": ["W", "W", "W", "W", "W"],
+    "POR": ["L", "L", "W", "L", "L"],
+    "UTA": ["L", "W", "L", "L", "L"],
+    "GSW": ["W", "W", "L", "W", "L"],
+    "LAC": ["W", "L", "W", "L", "W"],
+    "LAL": ["W", "W", "L", "L", "W"],
+    "PHX": ["W", "L", "W", "W", "W"],
+    "SAC": ["L", "W", "W", "L", "W"],
+    "ATL": ["W", "L", "L", "W", "W"],
+    "CHA": ["L", "L", "W", "L", "L"],
+    "MIA": ["W", "L", "W", "W", "L"],
+    "ORL": ["W", "W", "W", "L", "L"],
+    "WAS": ["L", "L", "L", "L", "W"],
+    "DAL": ["W", "W", "L", "W", "W"],
+    "HOU": ["W", "W", "L", "W", "L"],
+    "MEM": ["W", "L", "W", "W", "L"],
+    "NOP": ["L", "W", "W", "L", "W"],
+    "SAS": ["L", "W", "L", "W", "L"],
+}
+
+GAME_SLATE_TIMES: List[str] = [
+    "19:00 ET", "19:30 ET", "19:30 ET", "20:00 ET", "20:00 ET",
+    "20:30 ET", "20:30 ET", "21:00 ET", "21:00 ET", "21:30 ET",
+    "22:00 ET", "22:00 ET", "22:30 ET", "22:30 ET", "23:00 ET",
+]
 
 # Dataset completo embebido con los 30 equipos de la NBA por División
 DEFAULT_CSV_DATA = [
@@ -871,6 +932,17 @@ FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
     ("Portland Trail Blazers", "Utah Jazz"),
 ]
 
+ROSTER_EDITOR_COLS = [
+    "Team_Abbr",
+    "Star1_Name",
+    "Star1_PPG",
+    "Star2_Name",
+    "Star2_PPG",
+    "Pace",
+    "Off_Rtg",
+    "Def_Rtg",
+]
+
 
 # ==============================================================================
 # INYECCIÓN DE CSS: ESTÉTICA "CYBER-QUANT UI" (ROTOBOT / SHARP SYNDICATE)
@@ -937,7 +1009,7 @@ def inject_cyber_quant_css() -> None:
             border: 1px solid rgba(0, 245, 212, 0.30);
             border-radius: 16px;
             padding: 20px 26px;
-            margin-bottom: 22px;
+            margin-bottom: 18px;
             box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55), 0 0 24px rgba(0, 245, 212, 0.08);
             backdrop-filter: blur(18px);
             -webkit-backdrop-filter: blur(18px);
@@ -1032,7 +1104,7 @@ def inject_cyber_quant_css() -> None:
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin: 24px 0 14px 0;
+            margin: 22px 0 14px 0;
             padding-bottom: 8px;
             border-bottom: 1px solid rgba(0, 245, 212, 0.22);
         }
@@ -1094,7 +1166,7 @@ def inject_cyber_quant_css() -> None:
 
         .radar-pick-main {
             font-family: 'Orbitron', sans-serif;
-            font-size: 1.15rem;
+            font-size: 1.12rem;
             font-weight: 800;
             color: #F8FAFC;
             line-height: 1.25;
@@ -1103,7 +1175,7 @@ def inject_cyber_quant_css() -> None:
 
         .radar-prob-big {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 1.62rem;
+            font-size: 1.58rem;
             font-weight: 800;
             color: #00F5D4;
             line-height: 1.1;
@@ -1120,10 +1192,142 @@ def inject_cyber_quant_css() -> None:
             padding: 7px 10px;
         }
 
-        /* Contenedor Glassmorphism por Partido */
+        /* =====================================================================
+           VISTA A: TARJETAS DE CUADRÍCULA 3x3 (GRID GLASSMORPHISM CYBER-QUANT)
+           ===================================================================== */
+        .grid-game-card {
+            background: linear-gradient(155deg, rgba(14, 22, 44, 0.88) 0%, rgba(8, 13, 26, 0.94) 100%);
+            border: 1px solid rgba(0, 245, 212, 0.24);
+            border-radius: 16px;
+            padding: 16px 18px 14px 18px;
+            margin-bottom: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.50), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            transition: transform 0.18s ease, border-color 0.18s ease;
+        }
+
+        .grid-game-card:hover {
+            border-color: rgba(0, 245, 212, 0.55);
+            box-shadow: 0 12px 34px rgba(0, 245, 212, 0.12);
+        }
+
+        .grid-card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        }
+
+        .grid-league-badge {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.66rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            color: #00F5D4;
+            background: rgba(0, 245, 212, 0.10);
+            border: 1px solid rgba(0, 245, 212, 0.30);
+            padding: 3px 9px;
+            border-radius: 999px;
+        }
+
+        .grid-time-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.71rem;
+            color: #94A3B8;
+            font-weight: 600;
+        }
+
+        .grid-team-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 10px;
+            margin-bottom: 6px;
+            background: rgba(5, 8, 17, 0.60);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            border-radius: 10px;
+        }
+
+        .grid-team-info {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .grid-team-abbr {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.92rem;
+            font-weight: 800;
+            color: #F8FAFC;
+            margin-right: 6px;
+        }
+
+        .grid-team-fullname {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.78rem;
+            color: #94A3B8;
+            font-weight: 500;
+        }
+
+        .form-pills-wrap {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .form-pill-w {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.62rem;
+            font-weight: 800;
+            color: #050811;
+            background: #10B981;
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+
+        .form-pill-l {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.62rem;
+            font-weight: 800;
+            color: #F8FAFC;
+            background: rgba(244, 63, 94, 0.78);
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+
+        .grid-quick-forecast {
+            margin-top: 10px;
+            padding: 9px 12px;
+            background: linear-gradient(90deg, rgba(0, 245, 212, 0.08) 0%, rgba(56, 189, 248, 0.08) 100%);
+            border: 1px solid rgba(56, 189, 248, 0.28);
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.76rem;
+        }
+
+        .grid-forecast-lines {
+            color: #F8FAFC;
+            font-weight: 800;
+        }
+
+        .grid-forecast-win {
+            color: #00F5D4;
+            font-weight: 700;
+            font-size: 0.72rem;
+        }
+
+        /* =====================================================================
+           VISTA B: EXPEDIENTE DETALLADO Y SCOREBOARD TV HEADER (LOGOS 64PX)
+           ===================================================================== */
         .game-glass-wrapper {
-            background: linear-gradient(165deg, rgba(13, 21, 40, 0.84) 0%, rgba(7, 12, 24, 0.92) 100%);
-            border: 1px solid rgba(0, 245, 212, 0.22);
+            background: linear-gradient(165deg, rgba(13, 21, 40, 0.86) 0%, rgba(7, 12, 24, 0.94) 100%);
+            border: 1px solid rgba(0, 245, 212, 0.26);
             border-radius: 18px;
             padding: 22px 24px;
             margin-bottom: 28px;
@@ -1132,12 +1336,11 @@ def inject_cyber_quant_css() -> None:
             -webkit-backdrop-filter: blur(20px);
         }
 
-        /* Scoreboard TV Header del Partido */
         .scoreboard-tv-header {
             background: linear-gradient(90deg, rgba(6, 10, 22, 0.92) 0%, rgba(15, 25, 48, 0.92) 50%, rgba(6, 10, 22, 0.92) 100%);
             border: 1px solid rgba(56, 189, 248, 0.28);
             border-radius: 14px;
-            padding: 16px 22px;
+            padding: 18px 24px;
             margin-bottom: 18px;
             display: grid;
             grid-template-columns: 1.25fr 1fr 1.25fr;
@@ -1156,25 +1359,25 @@ def inject_cyber_quant_css() -> None:
             text-align: right;
         }
 
-        .team-logo-emblem {
-            width: 54px;
-            height: 54px;
-            border-radius: 12px;
+        .team-logo-box-64 {
+            width: 72px;
+            height: 72px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: 'Orbitron', sans-serif;
-            font-weight: 900;
-            font-size: 1.05rem;
-            color: #FFFFFF;
-            letter-spacing: 0.05em;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.50);
             flex-shrink: 0;
+            padding: 4px;
+        }
+
+        .team-logo-box-64 img {
+            margin-right: 0 !important;
         }
 
         .sb-team-name {
             font-family: 'Orbitron', sans-serif;
-            font-size: 1.15rem;
+            font-size: 1.18rem;
             font-weight: 800;
             color: #F8FAFC;
             margin: 0;
@@ -1182,9 +1385,9 @@ def inject_cyber_quant_css() -> None:
 
         .sb-team-metrics {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.74rem;
+            font-size: 0.75rem;
             color: #94A3B8;
-            margin-top: 3px;
+            margin-top: 4px;
         }
 
         .sb-center-console {
@@ -1197,7 +1400,7 @@ def inject_cyber_quant_css() -> None:
 
         .sb-proj-score {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 1.38rem;
+            font-size: 1.42rem;
             font-weight: 800;
             color: #00F5D4;
             letter-spacing: 0.04em;
@@ -1425,12 +1628,12 @@ def inject_cyber_quant_css() -> None:
             font-size: 0.96rem;
         }
 
-        /* Estilo para el formulario dinámico de cartelera */
+        /* Estilo para los expanders */
         div[data-testid="stExpander"] {
             background: rgba(11, 18, 35, 0.82);
             border: 1px solid rgba(0, 245, 212, 0.25);
             border-radius: 14px;
-            margin-bottom: 18px;
+            margin-bottom: 14px;
         }
 
         .slate-slot-badge {
@@ -1483,11 +1686,11 @@ def round_to_half_point(val: float) -> float:
     return float(np.floor(val) + 0.5)
 
 
-def load_nba_dataset(uploaded_file=None) -> Tuple[pd.DataFrame, str]:
-    """Carga nba_stats_completo.csv desde el archivo subido, ruta local o fallback embebido de 30 equipos."""
+def load_clean_nba_dataframe(uploaded_file=None) -> Tuple[pd.DataFrame, str]:
+    """Carga el CSV original limpio nba_stats_completo.csv (30 equipos)."""
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
-        return df, f"Archivo CSV cargado por el usuario ({len(df)} equipos)"
+        return df.copy(), f"Archivo CSV cargado ({len(df)} equipos)"
 
     candidate_paths = [
         Path("nba_stats_completo.csv"),
@@ -1498,14 +1701,24 @@ def load_nba_dataset(uploaded_file=None) -> Tuple[pd.DataFrame, str]:
         if path.exists():
             df = pd.read_csv(path)
             if len(df) >= 30:
-                return df, f"CSV local ({path.name} - {len(df)} equipos)"
+                return df.copy(), f"CSV Oficial ({path.name} - {len(df)} equipos)"
 
     df = pd.DataFrame(DEFAULT_CSV_DATA)
     try:
         df.to_csv("nba_stats_completo.csv", index=False, encoding="utf-8")
     except OSError:
         pass
-    return df, f"Dataset nba_stats_completo.csv ({len(df)} equipos NBA)"
+    return df.copy(), f"Dataset Oficial nba_stats_completo.csv ({len(df)} equipos)"
+
+
+def render_form_pills_html(team_abbr: str) -> str:
+    """Genera las pastillas visuales W/L de forma reciente para cada equipo en el Grid 3x3."""
+    form_list = TEAM_RECENT_FORM.get(str(team_abbr).upper(), ["W", "L", "W", "L", "W"])
+    pills = []
+    for item in form_list:
+        cls = "form-pill-w" if item == "W" else "form-pill-l"
+        pills.append(f'<span class="{cls}">{item}</span>')
+    return f'<div class="form-pills-wrap">{"".join(pills)}</div>'
 
 
 # ==============================================================================
@@ -1599,14 +1812,13 @@ def run_monte_carlo_matchup(
     home_row: pd.Series,
     n_sims: int = 5000,
     hfa_pts: float = 2.5,
-    custom_spread_home: float = None,
-    custom_total_line: float = None,
+    custom_spread_home: Optional[float] = None,
+    custom_total_line: Optional[float] = None,
     seed: int = 42,
 ) -> Dict:
     """
-    Ejecuta 5,000 iteraciones de Monte Carlo basadas en posesiones para un partido NBA.
-    Retorna métricas de Moneyline, Spread, Totales, Condiciones de Victoria,
-    Matchup Táctico PPP (Iso/PnR) y Player Props Leans.
+    Ejecuta 5,000 iteraciones de Monte Carlo basadas en posesiones para un partido NBA
+    consumiendo estrictamente las filas vigentes de st.session_state.df_nba.
     """
     rng = np.random.default_rng(seed)
 
@@ -1619,7 +1831,7 @@ def run_monte_carlo_matchup(
     away_base_ortg = float(away_row["Off_Rtg"]) + 0.58 * (float(home_row["Def_Rtg"]) - LEAGUE_AVG_ORTG)
     home_base_ortg = float(home_row["Off_Rtg"]) + 0.58 * (float(away_row["Def_Rtg"]) - LEAGUE_AVG_ORTG)
 
-    # Línea de apertura del mercado (basada en ratings macro antes del ajuste micro de estilos PPP)
+    # Línea de apertura del mercado (basada en ratings macro vigentes)
     mkt_away_pts = (exp_possessions / 100.0) * away_base_ortg - (hfa_pts / 2.0)
     mkt_home_pts = (exp_possessions / 100.0) * home_base_ortg + (hfa_pts / 2.0)
     default_market_spread_home = np.floor(-(mkt_home_pts - mkt_away_pts)) + 0.5
@@ -1866,11 +2078,10 @@ def run_monte_carlo_matchup(
 
 
 # ==============================================================================
-# COMPONENTES DE RENDERIZADO VISUAL (RADAR EJECUTIVO & TARJETAS GLASSMORPHISM)
+# COMPONENTES DE RENDERIZADO VISUAL (RADAR EJECUTIVO, GRID 3x3 & VISTA DETALLE)
 # ==============================================================================
 def extract_executive_radar(sim_results: List[Dict]) -> Dict:
     """Extrae los 4 Top Picks automáticos evaluando únicamente los partidos seleccionados en la jornada."""
-    # 1. El Lock de la Noche (Mayor Win % en Moneyline)
     best_ml = None
     for res in sim_results:
         candidates = [
@@ -1905,7 +2116,6 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
                     "proj_margin": cand[6],
                 }
 
-    # 2. El Rey del Spread (Mayor probabilidad de cubrir su Hándicap)
     best_spread = None
     for res in sim_results:
         h_line_str = f"{res['spread_line_home']:+.1f}"
@@ -1913,6 +2123,7 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
         candidates = [
             (
                 f"{res['home_team']} {h_line_str}",
+                res["home_abbr"],
                 res["home_cover_prob"],
                 res["home_sp_dec"],
                 res["home_sp_amer"],
@@ -1920,6 +2131,7 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
             ),
             (
                 f"{res['away_team']} {a_line_str}",
+                res["away_abbr"],
                 res["away_cover_prob"],
                 res["away_sp_dec"],
                 res["away_sp_amer"],
@@ -1927,21 +2139,22 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
             ),
         ]
         for cand in candidates:
-            if best_spread is None or cand[1] > best_spread["prob"]:
+            if best_spread is None or cand[2] > best_spread["prob"]:
                 best_spread = {
                     "pick": cand[0],
-                    "prob": cand[1],
-                    "dec": cand[2],
-                    "amer": cand[3],
-                    "context": cand[4],
+                    "abbr": cand[1],
+                    "prob": cand[2],
+                    "dec": cand[3],
+                    "amer": cand[4],
+                    "context": cand[5],
                 }
 
-    # 3. La Fija de Puntos (Mayor probabilidad de Over/Under Total)
     best_total = None
     for res in sim_results:
         candidates = [
             (
                 f"OVER {res['total_line']:.1f} Pts",
+                res["home_abbr"],
                 res["over_prob"],
                 res["over_dec"],
                 res["over_amer"],
@@ -1949,6 +2162,7 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
             ),
             (
                 f"UNDER {res['total_line']:.1f} Pts",
+                res["home_abbr"],
                 res["under_prob"],
                 res["under_dec"],
                 res["under_amer"],
@@ -1956,16 +2170,16 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
             ),
         ]
         for cand in candidates:
-            if best_total is None or cand[1] > best_total["prob"]:
+            if best_total is None or cand[2] > best_total["prob"]:
                 best_total = {
                     "pick": cand[0],
-                    "prob": cand[1],
-                    "dec": cand[2],
-                    "amer": cand[3],
-                    "context": cand[4],
+                    "abbr": cand[1],
+                    "prob": cand[2],
+                    "dec": cand[3],
+                    "amer": cand[4],
+                    "context": cand[5],
                 }
 
-    # 4. Player Prop Lean (Mejor inclinación de jugador entre los partidos escaneados)
     best_prop = None
     for res in sim_results:
         for prop in res["props"]:
@@ -2000,7 +2214,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             <div class="radar-card lock-card">
                 <div>
                     <div class="radar-tag">🔒 1. EL LOCK DE LA NOCHE</div>
-                    <div class="radar-pick-main">{lock['team']} ML</div>
+                    <div class="radar-pick-main">{escudo_nba_html(lock['abbr'], 26)}{lock['team']} ML</div>
                     <div class="radar-prob-big">{lock['prob'] * 100:.1f}% WIN</div>
                 </div>
                 <div class="radar-meta">
@@ -2019,7 +2233,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             <div class="radar-card spread-card">
                 <div>
                     <div class="radar-tag">⚡ 2. EL REY DEL SPREAD</div>
-                    <div class="radar-pick-main">{sp['pick']}</div>
+                    <div class="radar-pick-main">{escudo_nba_html(sp['abbr'], 26)}{sp['pick']}</div>
                     <div class="radar-prob-big" style="color: #38BDF8;">{sp['prob'] * 100:.1f}% COVER</div>
                 </div>
                 <div class="radar-meta">
@@ -2038,7 +2252,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             <div class="radar-card total-card">
                 <div>
                     <div class="radar-tag">🎯 3. LA FIJA DE PUNTOS</div>
-                    <div class="radar-pick-main">{tot['pick']}</div>
+                    <div class="radar-pick-main">{escudo_nba_html(tot['abbr'], 26)}{tot['pick']}</div>
                     <div class="radar-prob-big" style="color: #F59E0B;">{tot['prob'] * 100:.1f}% HIT</div>
                 </div>
                 <div class="radar-meta">
@@ -2058,7 +2272,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             <div class="radar-card prop-card">
                 <div>
                     <div class="radar-tag">🏀 4. PLAYER PROP LEAN</div>
-                    <div class="radar-pick-main">{pr['player_name']} {lean_word} {pr['prop_line']:.1f} Pts</div>
+                    <div class="radar-pick-main">{escudo_nba_html(pr['team_abbr'], 26)}{pr['player_name']} {lean_word} {pr['prop_line']:.1f}</div>
                     <div class="radar-prob-big" style="color: #A78BFA;">{pr['lean_prob'] * 100:.1f}% ({pr['lean_side']})</div>
                 </div>
                 <div class="radar-meta">
@@ -2071,6 +2285,97 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
         )
 
 
+def render_slate_grid_3x3(sim_results: List[Dict]) -> None:
+    """
+    3. VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
+    Renderiza cada partido con diseño Glassmorphism Cyber-Quant, escudos oficiales de 32px,
+    pastillas W/L, pronóstico rápido de Spread y Total y botón "LEER ANÁLISIS →".
+    """
+    st.markdown(
+        f"""
+        <div class="section-banner">
+            <div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) EN ESCANEO</div>
+            <div class="section-banner-tag">SELECCIONA UN PARTIDO PARA ABRIR SU EXPEDIENTE CUANTITATIVO</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for row_start in range(0, len(sim_results), 3):
+        cols = st.columns(3)
+        row_slice = sim_results[row_start : row_start + 3]
+
+        for col_idx, res in enumerate(row_slice):
+            global_idx = row_start + col_idx
+            away_abbr = res["away_abbr"]
+            home_abbr = res["home_abbr"]
+            est_time = GAME_SLATE_TIMES[global_idx % len(GAME_SLATE_TIMES)]
+
+            # Línea de Spread proyectada redondeada a .5 para el pronóstico rápido
+            proj_spread_half = round_to_half_point(abs(res["proj_spread_home"]) - 0.5)
+            if res["proj_spread_home"] <= 0:
+                quick_spread_str = f"{home_abbr} -{proj_spread_half:.1f}"
+            else:
+                quick_spread_str = f"{away_abbr} -{proj_spread_half:.1f}"
+
+            quick_total_half = round_to_half_point(res["exp_total_pts"])
+            fav_win_pct = res["fav_base_win"] * 100.0
+
+            away_logo_32 = escudo_nba_html(away_abbr, size=32)
+            home_logo_32 = escudo_nba_html(home_abbr, size=32)
+            away_pills = render_form_pills_html(away_abbr)
+            home_pills = render_form_pills_html(home_abbr)
+
+            with cols[col_idx]:
+                st.markdown(
+                    f"""
+                    <div class="grid-game-card">
+                        <div class="grid-card-top">
+                            <span class="grid-league-badge">NBA &middot; REGULAR SEASON</span>
+                            <span class="grid-time-badge">🕒 {est_time}</span>
+                        </div>
+                        <div class="grid-team-row">
+                            <div class="grid-team-info">
+                                {away_logo_32}
+                                <div>
+                                    <span class="grid-team-abbr">{away_abbr}</span>
+                                    <span class="grid-team-fullname">{res['away_team']}</span>
+                                </div>
+                            </div>
+                            {away_pills}
+                        </div>
+                        <div class="grid-team-row">
+                            <div class="grid-team-info">
+                                {home_logo_32}
+                                <div>
+                                    <span class="grid-team-abbr">{home_abbr}</span>
+                                    <span class="grid-team-fullname">{res['home_team']}</span>
+                                </div>
+                            </div>
+                            {home_pills}
+                        </div>
+                        <div class="grid-quick-forecast">
+                            <span class="grid-forecast-lines">{quick_spread_str} &nbsp;|&nbsp; O/U {quick_total_half:.1f}</span>
+                            <span class="grid-forecast-win">{res['fav_abbr']} {fav_win_pct:.1f}% WIN</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(
+                    "LEER ANÁLISIS →",
+                    key=f"btn_open_game_{global_idx}_{away_abbr}_{home_abbr}",
+                    use_container_width=True,
+                ):
+                    st.session_state.nba_partido_activo = {
+                        "idx": global_idx,
+                        "away_team": res["away_team"],
+                        "home_team": res["home_team"],
+                    }
+                    st.rerun()
+
+
 def format_edge_badge(delta_ppp: float) -> str:
     if delta_ppp >= 0.05:
         return f'<span class="edge-pill-pos">SHARP EDGE {delta_ppp:+.2f} PPP</span>'
@@ -2079,7 +2384,12 @@ def format_edge_badge(delta_ppp: float) -> str:
     return f'<span class="edge-pill-neu">NEUTRAL {delta_ppp:+.2f} PPP</span>'
 
 
-def render_game_card(res: Dict) -> None:
+def render_detailed_matchup_dossier(res: Dict) -> None:
+    """
+    4. VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO
+    Despliega el Scoreboard TV Header con logos oficiales de 64px y las 4 filas
+    del análisis cuantitativo de 5,000 simulaciones de Monte Carlo.
+    """
     away_abbr = res["away_abbr"]
     home_abbr = res["home_abbr"]
     away_row = res["away_row"]
@@ -2091,6 +2401,9 @@ def render_game_card(res: Dict) -> None:
     away_c1, away_c2 = TEAM_COLORS.get(away_abbr, ("#1E293B", "#38BDF8"))
     home_c1, home_c2 = TEAM_COLORS.get(home_abbr, ("#1E293B", "#00F5D4"))
 
+    away_logo_64 = escudo_nba_html(away_abbr, size=64)
+    home_logo_64 = escudo_nba_html(home_abbr, size=64)
+
     proj_spread_str = (
         f"{home_abbr} {res['proj_spread_home']:+.1f}"
         if res["proj_spread_home"] <= 0
@@ -2098,19 +2411,22 @@ def render_game_card(res: Dict) -> None:
     )
     mkt_spread_str = f"{home_abbr} {res['spread_line_home']:+.1f}"
 
-    # Scoreboard Header + Fila 1 + Fila 2 + Fila 3 + Fila 4
+    # Scoreboard TV Header con Logos Oficiales ESPN en 64px
     st.markdown(
         f"""
         <div class="game-glass-wrapper">
             <div class="scoreboard-tv-header">
                 <div class="sb-team-block">
-                    <div class="team-logo-emblem" style="background: linear-gradient(135deg, {away_c1}, {away_c2}); border: 1px solid {away_c2};">
-                        {away_abbr}
+                    <div class="team-logo-box-64" style="background: linear-gradient(135deg, {away_c1}55, {away_c2}33); border: 1px solid {away_c2};">
+                        {away_logo_64}
                     </div>
                     <div>
                         <div class="sb-team-name">{res['away_team']} <span style="font-size:0.72rem; color:#94A3B8;">(AWAY &bull; {away_div.upper()})</span></div>
                         <div class="sb-team-metrics">
                             ORTG: <strong>{away_row['Off_Rtg']:.1f}</strong> | DRTG: <strong>{away_row['Def_Rtg']:.1f}</strong> | PACE: <strong>{away_row['Pace']:.1f}</strong> | 3PA: <strong>{away_row['3PA_Rate']*100:.1f}%</strong>
+                        </div>
+                        <div class="sb-team-metrics" style="color:#CBD5E1;">
+                            Estrellas: <strong>{away_row['Star1_Name']} ({away_row['Star1_PPG']:.1f})</strong> &bull; <strong>{away_row['Star2_Name']} ({away_row['Star2_PPG']:.1f})</strong>
                         </div>
                     </div>
                 </div>
@@ -2134,9 +2450,12 @@ def render_game_card(res: Dict) -> None:
                         <div class="sb-team-metrics">
                             ORTG: <strong>{home_row['Off_Rtg']:.1f}</strong> | DRTG: <strong>{home_row['Def_Rtg']:.1f}</strong> | PACE: <strong>{home_row['Pace']:.1f}</strong> | 3PA: <strong>{home_row['3PA_Rate']*100:.1f}%</strong>
                         </div>
+                        <div class="sb-team-metrics" style="color:#CBD5E1;">
+                            Estrellas: <strong>{home_row['Star1_Name']} ({home_row['Star1_PPG']:.1f})</strong> &bull; <strong>{home_row['Star2_Name']} ({home_row['Star2_PPG']:.1f})</strong>
+                        </div>
                     </div>
-                    <div class="team-logo-emblem" style="background: linear-gradient(135deg, {home_c1}, {home_c2}); border: 1px solid {home_c2};">
-                        {home_abbr}
+                    <div class="team-logo-box-64" style="background: linear-gradient(135deg, {home_c1}55, {home_c2}33); border: 1px solid {home_c2};">
+                        {home_logo_64}
                     </div>
                 </div>
             </div>
@@ -2168,14 +2487,14 @@ def render_game_card(res: Dict) -> None:
                     <span style="color:#00F5D4;">NO-VIG FAIR ODDS</span>
                 </div>
                 <div class="sim-stat-line">
-                    <span class="sim-team-label">{away_abbr} (Visita)</span>
+                    <span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} (Visita)</span>
                     <span>
                         <span class="sim-prob-val">{res['away_win_prob']*100:.1f}%</span>
                         <span class="sim-odds-badge">{res['away_ml_dec']} / {res['away_ml_amer']}</span>
                     </span>
                 </div>
                 <div class="sim-stat-line">
-                    <span class="sim-team-label">{home_abbr} (Local)</span>
+                    <span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} (Local)</span>
                     <span>
                         <span class="sim-prob-val">{res['home_win_prob']*100:.1f}%</span>
                         <span class="sim-odds-badge">{res['home_ml_dec']} / {res['home_ml_amer']}</span>
@@ -2202,14 +2521,14 @@ def render_game_card(res: Dict) -> None:
                     <span style="color:#38BDF8;">LÍNEA: {home_abbr} {res['spread_line_home']:+.1f}</span>
                 </div>
                 <div class="sim-stat-line">
-                    <span class="sim-team-label">{away_abbr} ({res['spread_line_away']:+.1f})</span>
+                    <span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} ({res['spread_line_away']:+.1f})</span>
                     <span>
                         <span class="sim-prob-val" style="color:#38BDF8;">{res['away_cover_prob']*100:.1f}%</span>
                         <span class="sim-odds-badge">{res['away_sp_dec']} / {res['away_sp_amer']}</span>
                     </span>
                 </div>
                 <div class="sim-stat-line">
-                    <span class="sim-team-label">{home_abbr} ({res['spread_line_home']:+.1f})</span>
+                    <span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} ({res['spread_line_home']:+.1f})</span>
                     <span>
                         <span class="sim-prob-val" style="color:#38BDF8;">{res['home_cover_prob']*100:.1f}%</span>
                         <span class="sim-odds-badge">{res['home_sp_dec']} / {res['home_sp_amer']}</span>
@@ -2328,12 +2647,12 @@ def render_game_card(res: Dict) -> None:
         )
 
     # ------------------------------------------------------------------
-    # FILA 3: MATCHUP TÁCTICO (ISO PPP & PNR PPP VS DEFENSA RIVAL)
+    # FILA 3: MATCHUP TÁCTICO SYNERGY (ISO PPP & PNR PPP VS DEFENSA RIVAL)
     # ------------------------------------------------------------------
     st.markdown(
         """
         <div class="row-label-bar" style="border-left-color: #38BDF8;">
-            <span class="row-label-title">♟️ FILA 3 // MATCHUP TÁCTICO DE ESTILOS (ISO PPP &amp; PNR PPP VS DEFENSA RIVAL)</span>
+            <span class="row-label-title">♟️ FILA 3 // ANÁLISIS TÁCTICO SYNERGY (ISO PPP &amp; PNR PPP VS DEFENSAS RIVALES)</span>
             <span class="row-label-sub">PUNTOS POR POSESIÓN (SYNERGY PLAYTYPE MATRIX)</span>
         </div>
         """,
@@ -2398,12 +2717,12 @@ def render_game_card(res: Dict) -> None:
         )
 
     # ------------------------------------------------------------------
-    # FILA 4: PLAYER PROPS LEANS (ESTRELLAS DE CADA EQUIPO)
+    # FILA 4: PLAYER PROPS LEANS (ESTRELLAS VIGENTES DE st.session_state.df_nba)
     # ------------------------------------------------------------------
     st.markdown(
         """
         <div class="row-label-bar" style="border-left-color: #8B5CF6;">
-            <span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (MOTOR DE VARIANZA DE ESTRELLAS)</span>
+            <span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (SINCRONIZADO EN VIVO CON ROSTER EDITOR)</span>
             <span class="row-label-sub">SIMULACIÓN INDIVIDUAL AJUSTADA POR ESTILO DE DEFENSA RIVAL (ISO / PNR)</span>
         </div>
         """,
@@ -2418,11 +2737,11 @@ def render_game_card(res: Dict) -> None:
                 f"""
                 <div class="prop-player-card">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                        <span class="prop-player-name">{prop['player_name']}</span>
+                        <span class="prop-player-name">{escudo_nba_html(prop['team_abbr'], 22)}{prop['player_name']}</span>
                         <span class="sb-chip" style="font-size:0.66rem;">{prop['team_abbr']} &bull; {prop['style']}</span>
                     </div>
                     <div style="font-family:'JetBrains Mono',monospace; font-size:0.73rem; color:#94A3B8; margin-bottom:6px;">
-                        PPG Base: <strong>{prop['base_ppg']:.1f}</strong> &rarr; Proy: <strong style="color:#F8FAFC;">{prop['proj_ppg']:.1f} Pts</strong>
+                        PPG Vigente: <strong>{prop['base_ppg']:.1f}</strong> &rarr; Proy: <strong style="color:#F8FAFC;">{prop['proj_ppg']:.1f} Pts</strong>
                     </div>
                     <div style="background:rgba(5,8,17,0.72); border:1px solid rgba(148,163,184,0.16); border-radius:8px; padding:7px 10px; margin-bottom:6px;">
                         <div class="{lean_cls}">
@@ -2444,27 +2763,130 @@ def render_game_card(res: Dict) -> None:
 
 
 # ==============================================================================
-# GESTIÓN DE ESTADO REACTIVO PARA EL FORMULARIO Y AUTO-COLAPSO
+# 2. GESTIÓN DE ROSTER Y PERSISTENCIA EN SESIÓN (st.session_state + st.data_editor)
 # ==============================================================================
 def init_session_state() -> None:
+    if "df_nba" not in st.session_state:
+        clean_df, source_label = load_clean_nba_dataframe()
+        st.session_state.df_nba = clean_df
+        st.session_state.data_source_label = source_label
+    if "roster_editor_version" not in st.session_state:
+        st.session_state.roster_editor_version = 0
+    if "nba_partido_activo" not in st.session_state:
+        st.session_state.nba_partido_activo = None
     if "config_expanded" not in st.session_state:
-        st.session_state.config_expanded = True
+        st.session_state.config_expanded = False
     if "num_games" not in st.session_state:
-        st.session_state.num_games = 4
+        st.session_state.num_games = 6
     if "active_matchups" not in st.session_state:
-        st.session_state.active_matchups = list(FULL_30_TEAM_SLATE[:4])
+        st.session_state.active_matchups = list(FULL_30_TEAM_SLATE[:6])
     if "active_custom_lines" not in st.session_state:
         st.session_state.active_custom_lines = {}
 
 
 def keep_config_open() -> None:
-    """Mantiene abierto el panel st.expander cuando el usuario cambia el número de partidos."""
+    """Abre el configurador de cruces y vuelve a la Cartelera cuando cambia el número de juegos."""
     st.session_state.config_expanded = True
+    st.session_state.nba_partido_activo = None
 
 
 def reopen_config_panel() -> None:
-    """Permite reabrir el configurador con un clic tras haberse auto-colapsado."""
+    """Permite abrir el configurador de cruces con un clic."""
     st.session_state.config_expanded = True
+    st.session_state.nba_partido_activo = None
+
+
+def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
+    """
+    Sincroniza cualquier edición de nombres, PPG, Pace, Off_Rtg o Def_Rtg realizada en
+    st.data_editor directamente sobre st.session_state.df_nba y ajusta las líneas
+    de Player Props cuando el usuario cambia un jugador o su PPG base.
+    """
+    master_df = st.session_state.df_nba.copy()
+
+    for idx in edited_subset.index:
+        if idx not in master_df.index:
+            continue
+
+        old_s1_name = str(master_df.loc[idx, "Star1_Name"])
+        old_s1_ppg = float(master_df.loc[idx, "Star1_PPG"])
+        old_s2_name = str(master_df.loc[idx, "Star2_Name"])
+        old_s2_ppg = float(master_df.loc[idx, "Star2_PPG"])
+
+        new_s1_name = str(edited_subset.loc[idx, "Star1_Name"])
+        new_s1_ppg = float(edited_subset.loc[idx, "Star1_PPG"])
+        new_s2_name = str(edited_subset.loc[idx, "Star2_Name"])
+        new_s2_ppg = float(edited_subset.loc[idx, "Star2_PPG"])
+
+        for col in ROSTER_EDITOR_COLS:
+            master_df.loc[idx, col] = edited_subset.loc[idx, col]
+
+        # Si el usuario editó la estrella o su PPG por traspaso/lesión, actualizamos su línea vigente
+        if new_s1_name != old_s1_name or abs(new_s1_ppg - old_s1_ppg) > 1e-4:
+            master_df.loc[idx, "Star1_Line"] = round_to_half_point(max(0.5, new_s1_ppg - 0.5))
+        if new_s2_name != old_s2_name or abs(new_s2_ppg - old_s2_ppg) > 1e-4:
+            master_df.loc[idx, "Star2_Line"] = round_to_half_point(max(0.5, new_s2_ppg - 0.5))
+
+    st.session_state.df_nba = master_df
+
+
+def render_live_roster_manager() -> None:
+    """
+    Renderiza el st.expander('⚙️ Gestor de Roster & Traspasos (Live Trades / Injuries)', expanded=False)
+    con st.data_editor sincronizado en tiempo real con st.session_state.df_nba y botón de restablecimiento.
+    """
+    with st.expander("⚙️ Gestor de Roster & Traspasos (Live Trades / Injuries)", expanded=False):
+        top_c1, top_c2 = st.columns([3.4, 1.2])
+        with top_c1:
+            st.markdown(
+                """
+                <div style="font-family:'JetBrains Mono',monospace; font-size:0.77rem; color:#CBD5E1; margin-bottom:6px;">
+                    Edita en vivo bajas por lesión, traspasos de último minuto, minutos/PPG proyectados (`Star1_PPG`, `Star2_PPG`) o ajustes de ritmo y eficiencia (`Pace`, `Off_Rtg`, `Def_Rtg`). Tanto el motor Monte Carlo de 5,000 posesiones como los Player Props se recalculan instantáneamente con estos valores.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with top_c2:
+            if st.button("🔄 Restablecer Roster Oficial", use_container_width=True):
+                clean_df, src_label = load_clean_nba_dataframe()
+                st.session_state.df_nba = clean_df
+                st.session_state.data_source_label = src_label
+                st.session_state.roster_editor_version += 1
+                st.rerun()
+
+        current_subset = st.session_state.df_nba[ROSTER_EDITOR_COLS].copy()
+        edited_df = st.data_editor(
+            current_subset,
+            key=f"nba_roster_data_editor_{st.session_state.roster_editor_version}",
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            disabled=["Team_Abbr"],
+            column_config={
+                "Team_Abbr": st.column_config.TextColumn("Franquicia", width="small"),
+                "Star1_Name": st.column_config.TextColumn("Estrella 1 (Líder)", width="medium"),
+                "Star1_PPG": st.column_config.NumberColumn(
+                    "Star1 PPG", min_value=0.0, max_value=60.0, step=0.5, format="%.1f"
+                ),
+                "Star2_Name": st.column_config.TextColumn("Estrella 2 (Co-Líder)", width="medium"),
+                "Star2_PPG": st.column_config.NumberColumn(
+                    "Star2 PPG", min_value=0.0, max_value=60.0, step=0.5, format="%.1f"
+                ),
+                "Pace": st.column_config.NumberColumn(
+                    "Pace (48m)", min_value=85.0, max_value=115.0, step=0.2, format="%.1f"
+                ),
+                "Off_Rtg": st.column_config.NumberColumn(
+                    "Off_Rtg", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"
+                ),
+                "Def_Rtg": st.column_config.NumberColumn(
+                    "Def_Rtg", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"
+                ),
+            },
+        )
+
+        if not edited_df.equals(current_subset):
+            sync_edited_roster_to_session(edited_df)
+            st.rerun()
 
 
 # ==============================================================================
@@ -2482,7 +2904,7 @@ def main() -> None:
                 ⚡ SHARP SYNDICATE
             </div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">
-                NBA 30-TEAM MONTE CARLO ENGINE v5.0
+                NBA 30-TEAM MONTE CARLO ENGINE v6.0
             </div>
             """,
             unsafe_allow_html=True,
@@ -2491,10 +2913,15 @@ def main() -> None:
         uploaded_csv = st.file_uploader(
             "Cargar nba_stats_completo.csv (Opcional)",
             type=["csv"],
-            help="Si no subes un archivo, se carga automáticamente nba_stats_completo.csv con las 30 franquicias NBA.",
+            help="Si subes un archivo CSV propio, se actualizará st.session_state.df_nba.",
         )
+        if uploaded_csv is not None:
+            custom_df, custom_label = load_clean_nba_dataframe(uploaded_csv)
+            st.session_state.df_nba = custom_df
+            st.session_state.data_source_label = custom_label
 
-        df_teams, data_source_label = load_nba_dataset(uploaded_csv)
+        # Consumir estrictamente st.session_state.df_nba
+        df_teams = st.session_state.df_nba
         team_list = df_teams["Team"].tolist()
 
         st.markdown("---")
@@ -2505,14 +2932,19 @@ def main() -> None:
             max_value=15,
             key="num_games",
             on_change=keep_config_open,
-            help="Elige de 1 a 15 partidos. El formulario principal generará dinámicamente esa cantidad exacta de selectores.",
+            help="Elige de 1 a 15 partidos. La Cartelera en Cuadrícula (Grid 3x3) se adaptará automáticamente.",
         )
 
         st.button(
-            "🎛️ Abrir Configurador de Equipos",
+            "🎛️ Configurar Cruces de Hoy",
             on_click=reopen_config_panel,
             use_container_width=True,
         )
+
+        if st.session_state.nba_partido_activo is not None:
+            if st.button("← Volver a la Cartelera NBA", key="sidebar_back_btn", use_container_width=True):
+                st.session_state.nba_partido_activo = None
+                st.rerun()
 
         st.markdown("---")
         st.markdown("### ⚙️ PARÁMETROS DEL MOTOR")
@@ -2537,115 +2969,7 @@ def main() -> None:
         )
 
         st.markdown("---")
-        st.caption(f"📂 Fuente activa: {data_source_label}")
-
-    # ==========================================================================
-    # PANEL DE CONFIGURACIÓN AUTO-COLAPSABLE CON FORMULARIO DINÁMICO (st.form)
-    # ==========================================================================
-    with st.expander(
-        f"🎛️ CONFIGURADOR DINÁMICO DE CARTELERA ({num_games} JUEGO{'S' if num_games > 1 else ''} EN LA CARTELERA DE HOY)",
-        expanded=st.session_state.config_expanded,
-    ):
-        st.markdown(
-            f"""
-            <div style="font-family:'JetBrains Mono',monospace; font-size:0.78rem; color:#CBD5E1; margin-bottom:10px;">
-                Selecciona libremente el equipo <strong>Visitante (Away)</strong> y <strong>Local (Home)</strong> de entre las <strong>30 franquicias NBA</strong> para los <strong>{num_games}</strong> partidos de hoy. Al pulsar el botón de escaneo, este panel se colapsará automáticamente y el motor correrá <strong>{n_sims:,} simulaciones</strong> por juego.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        with st.form("dynamic_slate_form", clear_on_submit=False):
-            form_selections: List[Tuple[str, str]] = []
-            form_custom_lines: Dict[int, Tuple[float, float]] = {}
-
-            for i in range(num_games):
-                default_away, default_home = FULL_30_TEAM_SLATE[i % len(FULL_30_TEAM_SLATE)]
-                if i < len(st.session_state.active_matchups):
-                    prev_away, prev_home = st.session_state.active_matchups[i]
-                    if prev_away in team_list and prev_home in team_list:
-                        default_away, default_home = prev_away, prev_home
-
-                away_idx = team_list.index(default_away) if default_away in team_list else (i * 2) % len(team_list)
-                home_idx = team_list.index(default_home) if default_home in team_list else (i * 2 + 1) % len(team_list)
-
-                st.markdown(
-                    f'<div class="slate-slot-badge">🏀 JUEGO #{i + 1} DE {num_games}</div>',
-                    unsafe_allow_html=True,
-                )
-                col_a, col_h, col_sp, col_tot = st.columns([2.2, 2.2, 1.1, 1.1])
-
-                with col_a:
-                    sel_away = st.selectbox(
-                        f"Visitante (Juego #{i + 1})",
-                        options=team_list,
-                        index=away_idx,
-                        key=f"form_away_{i}",
-                    )
-                with col_h:
-                    sel_home = st.selectbox(
-                        f"Local (Juego #{i + 1})",
-                        options=team_list,
-                        index=home_idx,
-                        key=f"form_home_{i}",
-                    )
-                with col_sp:
-                    sel_sp = st.number_input(
-                        f"Spread Local #{i + 1} (0=Auto)",
-                        value=0.0,
-                        step=0.5,
-                        key=f"form_sp_{i}",
-                    )
-                with col_tot:
-                    sel_tot = st.number_input(
-                        f"Total O/U #{i + 1} (0=Auto)",
-                        value=0.0,
-                        step=0.5,
-                        key=f"form_tot_{i}",
-                    )
-
-                form_selections.append((sel_away, sel_home))
-                form_custom_lines[i] = (
-                    sel_sp if sel_sp != 0.0 else None,
-                    sel_tot if sel_tot != 0.0 else None,
-                )
-
-            submitted = st.form_submit_button(
-                f"⚡ ESCANEAR {num_games} PARTIDO(S) DE HOY ({num_games * n_sims:,} SIMULACIONES MONTE CARLO)",
-                use_container_width=True,
-            )
-
-            if submitted:
-                valid_matchups: List[Tuple[str, str]] = []
-                valid_lines: Dict[int, Tuple[float, float]] = {}
-                duplicate_team_games: List[int] = []
-
-                for idx, (away_t, home_t) in enumerate(form_selections):
-                    if away_t == home_t:
-                        duplicate_team_games.append(idx + 1)
-                    else:
-                        valid_idx = len(valid_matchups)
-                        valid_matchups.append((away_t, home_t))
-                        valid_lines[valid_idx] = form_custom_lines[idx]
-
-                if duplicate_team_games:
-                    st.warning(
-                        f"Atención: El Juego #{', #'.join(map(str, duplicate_team_games))} tenía el mismo equipo como Visitante y Local y fue omitido. Selecciona dos franquicias distintas."
-                    )
-
-                if valid_matchups:
-                    st.session_state.active_matchups = valid_matchups
-                    st.session_state.active_custom_lines = valid_lines
-                    st.session_state.config_expanded = False
-                    st.rerun()
-
-    # Sincronizar si el usuario redujo el slider y aún no ha pulsado submit, o mantener la lista validada
-    selected_matchups: List[Tuple[str, str]] = st.session_state.active_matchups[:num_games]
-    if len(selected_matchups) < num_games:
-        for extra_idx in range(len(selected_matchups), num_games):
-            fallback_pair = FULL_30_TEAM_SLATE[extra_idx % len(FULL_30_TEAM_SLATE)]
-            if fallback_pair[0] in team_list and fallback_pair[1] in team_list:
-                selected_matchups.append(fallback_pair)
+        st.caption(f"📂 Fuente activa: {st.session_state.data_source_label}")
 
     # Scoreboard TV Header Principal
     st.markdown(
@@ -2653,7 +2977,7 @@ def main() -> None:
         <div class="tv-master-header">
             <div class="tv-top-bar">
                 <div class="syndicate-badge">
-                    <span class="pulse-dot"></span> SHARP SYNDICATE // 30-TEAM POSSESSION MONTE CARLO
+                    <span class="pulse-dot"></span> SHARP SYNDICATE // LIVE ROSTER &amp; 3x3 GRID SCANNER
                 </div>
                 <div class="font-mono" style="font-size:0.76rem; color:#94A3B8;">
                     ENGINE STATUS: <strong style="color:#00F5D4;">ONLINE</strong> &nbsp;|&nbsp;
@@ -2663,78 +2987,206 @@ def main() -> None:
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
             <div class="tv-subtitle">
-                Escáner dinámico de 1 a 15 partidos entre las 30 franquicias NBA con simulación de posesiones, Synergy PPP (Iso &amp; PnR) y motor de varianza para Player Props.
+                Cartelera interactiva 3x3 con escudos oficiales ESPN HD, Gestor de Rosters y Traspasos en Vivo (<code>st.data_editor</code>) y motor Monte Carlo de 5,000 posesiones.
             </div>
             <div class="tv-telemetry-strip">
-                <div class="telemetry-pill">FRANQUICIAS NBA: <strong>{len(df_teams)} / 30 (6 DIVISIONES)</strong></div>
-                <div class="telemetry-pill">PARTIDOS ESCANEADOS HOY: <strong>{len(selected_matchups)}</strong></div>
-                <div class="telemetry-pill">ITERACIONES EJECUTADAS: <strong>{len(selected_matchups) * n_sims:,}</strong></div>
-                <div class="telemetry-pill">MODELO: <strong>PACE &times; ADJ_ORTG + SYNERGY PPP + BINOMIAL 3PT</strong></div>
+                <div class="telemetry-pill">FRANQUICIAS EN SESIÓN: <strong>{len(df_teams)} / 30</strong></div>
+                <div class="telemetry-pill">CARTELERA ACTIVA: <strong>{num_games} PARTIDO(S)</strong></div>
+                <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{num_games * n_sims:,}</strong></div>
+                <div class="telemetry-pill">VISTA ACTUAL: <strong>{"EXPEDIENTE DETALLADO" if st.session_state.nba_partido_activo else "CARTELERA GRID 3x3"}</strong></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if not selected_matchups:
-        st.info("Abre el configurador superior y selecciona al menos un partido válido para iniciar el escáner.")
-        return
+    # Panel de Edición en Vivo de Rosters, Traspasos y Bajas (disponible en ambas vistas)
+    render_live_roster_manager()
 
-    # Ejecutar las 5,000 simulaciones únicamente sobre los partidos seleccionados
-    sim_results: List[Dict] = []
-    for idx, (away_name, home_name) in enumerate(selected_matchups):
+    # Sincronizar lista activa de partidos con num_games
+    df_teams = st.session_state.df_nba
+    team_list = df_teams["Team"].tolist()
+
+    selected_matchups: List[Tuple[str, str]] = list(st.session_state.active_matchups[:num_games])
+    if len(selected_matchups) < num_games:
+        for extra_idx in range(len(selected_matchups), num_games):
+            fallback_pair = FULL_30_TEAM_SLATE[extra_idx % len(FULL_30_TEAM_SLATE)]
+            if fallback_pair[0] in team_list and fallback_pair[1] in team_list:
+                selected_matchups.append(fallback_pair)
+
+    # ==========================================================================
+    # NAVEGACIÓN PRINCIPAL: VISTA A (GRID 3x3) vs VISTA B (EXPEDIENTE DETALLADO)
+    # ==========================================================================
+    if st.session_state.nba_partido_activo is None:
+        # ----------------------------------------------------------------------
+        # VISTA A: SELECTOR DE CRUCES + RADAR EJECUTIVO + CARTELERA EN CUADRÍCULA 3x3
+        # ----------------------------------------------------------------------
+        with st.expander(
+            f"🎛️ CONFIGURADOR DINÁMICO DE CRUCES ({num_games} JUEGO{'S' if num_games > 1 else ''} EN LA CARTELERA DE HOY)",
+            expanded=st.session_state.config_expanded,
+        ):
+            st.markdown(
+                f"""
+                <div style="font-family:'JetBrains Mono',monospace; font-size:0.78rem; color:#CBD5E1; margin-bottom:10px;">
+                    Elige el equipo <strong>Visitante (Away)</strong> y <strong>Local (Home)</strong> de entre las <strong>30 franquicias NBA</strong> para cada uno de los <strong>{num_games}</strong> juegos. Al pulsar el botón de escanear, este panel se colapsará automáticamente y actualizará la cuadrícula 3x3.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            with st.form("dynamic_slate_form", clear_on_submit=False):
+                form_selections: List[Tuple[str, str]] = []
+                form_custom_lines: Dict[int, Tuple[ Optional[float], Optional[float] ]] = {}
+
+                for i in range(num_games):
+                    default_away, default_home = FULL_30_TEAM_SLATE[i % len(FULL_30_TEAM_SLATE)]
+                    if i < len(selected_matchups):
+                        prev_away, prev_home = selected_matchups[i]
+                        if prev_away in team_list and prev_home in team_list:
+                            default_away, default_home = prev_away, prev_home
+
+                    away_idx = team_list.index(default_away) if default_away in team_list else (i * 2) % len(team_list)
+                    home_idx = team_list.index(default_home) if default_home in team_list else (i * 2 + 1) % len(team_list)
+
+                    st.markdown(
+                        f'<div class="slate-slot-badge">🏀 JUEGO #{i + 1} DE {num_games}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    col_a, col_h, col_sp, col_tot = st.columns([2.2, 2.2, 1.1, 1.1])
+
+                    with col_a:
+                        sel_away = st.selectbox(
+                            f"Visitante (Juego #{i + 1})",
+                            options=team_list,
+                            index=away_idx,
+                            key=f"form_away_{i}",
+                        )
+                    with col_h:
+                        sel_home = st.selectbox(
+                            f"Local (Juego #{i + 1})",
+                            options=team_list,
+                            index=home_idx,
+                            key=f"form_home_{i}",
+                        )
+                    with col_sp:
+                        sel_sp = st.number_input(
+                            f"Spread Local #{i + 1} (0=Auto)",
+                            value=0.0,
+                            step=0.5,
+                            key=f"form_sp_{i}",
+                        )
+                    with col_tot:
+                        sel_tot = st.number_input(
+                            f"Total O/U #{i + 1} (0=Auto)",
+                            value=0.0,
+                            step=0.5,
+                            key=f"form_tot_{i}",
+                        )
+
+                    form_selections.append((sel_away, sel_home))
+                    form_custom_lines[i] = (
+                        sel_sp if sel_sp != 0.0 else None,
+                        sel_tot if sel_tot != 0.0 else None,
+                    )
+
+                submitted = st.form_submit_button(
+                    f"⚡ ESCANEAR {num_games} PARTIDO(S) DE HOY ({num_games * n_sims:,} SIMULACIONES MONTE CARLO)",
+                    use_container_width=True,
+                )
+
+                if submitted:
+                    valid_matchups: List[Tuple[str, str]] = []
+                    valid_lines: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
+                    duplicate_team_games: List[int] = []
+
+                    for idx, (away_t, home_t) in enumerate(form_selections):
+                        if away_t == home_t:
+                            duplicate_team_games.append(idx + 1)
+                        else:
+                            valid_idx = len(valid_matchups)
+                            valid_matchups.append((away_t, home_t))
+                            valid_lines[valid_idx] = form_custom_lines[idx]
+
+                    if duplicate_team_games:
+                        st.warning(
+                            f"Atención: El Juego #{', #'.join(map(str, duplicate_team_games))} tenía el mismo equipo como Visitante y Local y fue omitido."
+                        )
+
+                    if valid_matchups:
+                        st.session_state.active_matchups = valid_matchups
+                        st.session_state.active_custom_lines = valid_lines
+                        st.session_state.config_expanded = False
+                        st.rerun()
+
+        if not selected_matchups:
+            st.info("Configura al menos un partido válido para visualizar la Cartelera NBA.")
+            return
+
+        # Ejecutar las 5,000 simulaciones consumiendo estrictamente st.session_state.df_nba
+        sim_results: List[Dict] = []
+        for idx, (away_name, home_name) in enumerate(selected_matchups):
+            away_row = df_teams[df_teams["Team"] == away_name].iloc[0]
+            home_row = df_teams[df_teams["Team"] == home_name].iloc[0]
+            c_sp, c_tot = st.session_state.active_custom_lines.get(idx, (None, None))
+
+            res = run_monte_carlo_matchup(
+                away_row=away_row,
+                home_row=home_row,
+                n_sims=n_sims,
+                hfa_pts=hfa_pts,
+                custom_spread_home=c_sp,
+                custom_total_line=c_tot,
+                seed=int(base_seed) + idx * 101,
+            )
+            sim_results.append(res)
+
+        # Renderizar Radar Ejecutivo de la Jornada
+        radar_picks = extract_executive_radar(sim_results)
+        render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
+
+        # Renderizar Cartelera en Cuadrícula (Grid de 3 Columnas)
+        render_slate_grid_3x3(sim_results)
+
+    else:
+        # ----------------------------------------------------------------------
+        # VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO DEL PARTIDO SELECCIONADO
+        # ----------------------------------------------------------------------
+        active_info = st.session_state.nba_partido_activo
+        game_idx = int(active_info.get("idx", 0))
+        away_name = str(active_info["away_team"])
+        home_name = str(active_info["home_team"])
+
+        nav_c1, nav_c2 = st.columns([1.4, 3.6])
+        with nav_c1:
+            if st.button("← Volver a la Cartelera NBA", key="top_back_to_grid_btn", use_container_width=True):
+                st.session_state.nba_partido_activo = None
+                st.rerun()
+        with nav_c2:
+            st.markdown(
+                f"""
+                <div style="display:flex; align-items:center; height:38px; font-family:'JetBrains Mono',monospace; font-size:0.80rem; color:#00F5D4;">
+                    📂 EXPEDIENTE ACTIVO: <strong style="color:#F8FAFC; margin-left:8px;">{away_name.upper()} @ {home_name.upper()}</strong> &nbsp;|&nbsp; Datos sincronizados en vivo con <code>st.session_state.df_nba</code>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # Consumir estrictamente st.session_state.df_nba para recalcular con cualquier cambio en vivo
         away_row = df_teams[df_teams["Team"] == away_name].iloc[0]
         home_row = df_teams[df_teams["Team"] == home_name].iloc[0]
-        c_sp, c_tot = st.session_state.active_custom_lines.get(idx, (None, None))
+        c_sp, c_tot = st.session_state.active_custom_lines.get(game_idx, (None, None))
 
-        res = run_monte_carlo_matchup(
+        detailed_res = run_monte_carlo_matchup(
             away_row=away_row,
             home_row=home_row,
             n_sims=n_sims,
             hfa_pts=hfa_pts,
             custom_spread_home=c_sp,
             custom_total_line=c_tot,
-            seed=int(base_seed) + idx * 101,
+            seed=int(base_seed) + game_idx * 101,
         )
-        sim_results.append(res)
 
-    # 1. Renderizar Radar Ejecutivo Dinámico (evalúa únicamente los N partidos seleccionados)
-    radar_picks = extract_executive_radar(sim_results)
-    render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
-
-    # 2. Renderizar Desglose por Partido en Tarjetas Glassmorphism
-    st.markdown(
-        f"""
-        <div class="section-banner">
-            <div class="section-banner-title">🖥️ DESGLOSE TÁCTICO Y CUANTITATIVO ({len(sim_results)} PARTIDO{'S' if len(sim_results) > 1 else ''} ESCANEADO{'S' if len(sim_results) > 1 else ''})</div>
-            <div class="section-banner-tag">SCOREBOARD TV HEADER + 4 FILAS DE INTELIGENCIA SHARP</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    for res in sim_results:
-        render_game_card(res)
-
-    # 3. Visor del Dataset Backend (`nba_stats_completo.csv` con las 30 franquicias)
-    with st.expander("🗄️ INSPECCIONAR BASE DE DATOS BACKEND (30 EQUIPOS - nba_stats_completo.csv)", expanded=False):
-        div_view = st.selectbox(
-            "Filtrar tabla por División:",
-            options=["Todas (30 Equipos)", "Atlántico", "Central", "Noroeste", "Pacífico", "Sureste", "Suroeste"],
-            index=0,
-        )
-        if div_view != "Todas (30 Equipos)" and "Division" in df_teams.columns:
-            df_display = df_teams[df_teams["Division"] == div_view]
-        else:
-            df_display = df_teams
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-        csv_bytes = df_teams.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="⬇️ Descargar nba_stats_completo.csv (30 Equipos NBA)",
-            data=csv_bytes,
-            file_name="nba_stats_completo.csv",
-            mime="text/csv",
-        )
+        render_detailed_matchup_dossier(detailed_res)
 
 
 if __name__ == "__main__":
