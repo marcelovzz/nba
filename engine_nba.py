@@ -1,6 +1,8 @@
+import io
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 LEAGUE_AVG_ORTG = 115.5
 LEAGUE_AVG_PACE = 99.0
@@ -15,25 +17,21 @@ GAME_SLATE_TIMES: List[str] = [
 ]
 
 LINEUP_COLS: List[str] = ["Posición", "Jugador", "Minutos_Esperados", "O_EPM", "D_EPM"]
+EXCEL_TEMPLATE_COLS: List[str] = [
+    "Team_Abbr", "Pos", "Jugador", "Minutos", "O_EPM", "D_EPM", "Pace_Diff", "Es_Estrella", "PPG_Linea",
+]
 ROSTER_EDITOR_COLS: List[str] = [
     "Team_Abbr", "Star1_Name", "Star1_PPG", "Star2_Name", "Star2_PPG", "Pace", "Off_Rtg", "Def_Rtg",
 ]
 
 FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
-    ("Detroit Pistons", "Boston Celtics"),
-    ("New York Knicks", "Miami Heat"),
-    ("Dallas Mavericks", "Denver Nuggets"),
-    ("Golden State Warriors", "Los Angeles Lakers"),
-    ("Minnesota Timberwolves", "Oklahoma City Thunder"),
-    ("Philadelphia 76ers", "Cleveland Cavaliers"),
-    ("Milwaukee Bucks", "Indiana Pacers"),
-    ("Phoenix Suns", "LA Clippers"),
-    ("Sacramento Kings", "Memphis Grizzlies"),
-    ("Houston Rockets", "San Antonio Spurs"),
-    ("Orlando Magic", "Atlanta Hawks"),
-    ("New Orleans Pelicans", "Chicago Bulls"),
-    ("Brooklyn Nets", "Toronto Raptors"),
-    ("Charlotte Hornets", "Washington Wizards"),
+    ("Detroit Pistons", "Boston Celtics"), ("New York Knicks", "Miami Heat"),
+    ("Dallas Mavericks", "Denver Nuggets"), ("Golden State Warriors", "Los Angeles Lakers"),
+    ("Minnesota Timberwolves", "Oklahoma City Thunder"), ("Philadelphia 76ers", "Cleveland Cavaliers"),
+    ("Milwaukee Bucks", "Indiana Pacers"), ("Phoenix Suns", "LA Clippers"),
+    ("Sacramento Kings", "Memphis Grizzlies"), ("Houston Rockets", "San Antonio Spurs"),
+    ("Orlando Magic", "Atlanta Hawks"), ("New Orleans Pelicans", "Chicago Bulls"),
+    ("Brooklyn Nets", "Toronto Raptors"), ("Charlotte Hornets", "Washington Wizards"),
     ("Portland Trail Blazers", "Utah Jazz"),
 ]
 
@@ -73,248 +71,37 @@ DEFAULT_CSV_DATA: List[Dict] = [
     {"Team": "San Antonio Spurs", "Team_Abbr": "SAS", "Conference": "West", "Division": "Suroeste", "Pace": 100.9, "Off_Rtg": 113.1, "Def_Rtg": 113.4, "3PA_Rate": 0.391, "3P_Pct": 0.359, "TOV_Pct": 14.5, "Iso_PPP_Off": 1.02, "Iso_PPP_Def": 0.96, "PnR_PPP_Off": 1.05, "PnR_PPP_Def": 0.95, "Star1_Name": "Victor Wembanyama", "Star1_PPG": 24.4, "Star1_Line": 23.5, "Star1_Style": "PNR", "Star1_Std": 5.8, "Star2_Name": "Devin Vassell", "Star2_PPG": 18.9, "Star2_Line": 18.5, "Star2_Style": "PNR", "Star2_Std": 5.0},
 ]
 
-# Quintetos titulares base + unidad de banca (240 min) con O-EPM y D-EPM para las 30 franquicias
 DEFAULT_LINEUPS_30_TEAMS: Dict[str, List[Dict]] = {
-    "BOS": [
-        {"Posición": "PG", "Jugador": "Jrue Holiday", "Minutos_Esperados": 33.0, "O_EPM": 1.4, "D_EPM": 2.3},
-        {"Posición": "SG", "Jugador": "Derrick White", "Minutos_Esperados": 34.0, "O_EPM": 2.6, "D_EPM": 2.4},
-        {"Posición": "SF", "Jugador": "Jaylen Brown", "Minutos_Esperados": 35.0, "O_EPM": 2.8, "D_EPM": 0.9},
-        {"Posición": "PF", "Jugador": "Jayson Tatum", "Minutos_Esperados": 36.0, "O_EPM": 4.8, "D_EPM": 1.5},
-        {"Posición": "C", "Jugador": "Kristaps Porzingis", "Minutos_Esperados": 30.0, "O_EPM": 2.9, "D_EPM": 2.1},
-        {"Posición": "BENCH", "Jugador": "Pritchard / Horford / Hauser", "Minutos_Esperados": 72.0, "O_EPM": 0.9, "D_EPM": 0.6},
-    ],
-    "BKN": [
-        {"Posición": "PG", "Jugador": "Dennis Schroder", "Minutos_Esperados": 32.0, "O_EPM": 0.5, "D_EPM": -0.6},
-        {"Posición": "SG", "Jugador": "Cam Thomas", "Minutos_Esperados": 34.0, "O_EPM": 1.6, "D_EPM": -1.8},
-        {"Posición": "SF", "Jugador": "Cameron Johnson", "Minutos_Esperados": 31.0, "O_EPM": 1.1, "D_EPM": -0.2},
-        {"Posición": "PF", "Jugador": "Dorian Finney-Smith", "Minutos_Esperados": 29.0, "O_EPM": -1.2, "D_EPM": 0.8},
-        {"Posición": "C", "Jugador": "Nic Claxton", "Minutos_Esperados": 30.0, "O_EPM": -0.5, "D_EPM": 1.9},
-        {"Posición": "BENCH", "Jugador": "Simmons / Clowney / Wilson", "Minutos_Esperados": 84.0, "O_EPM": -1.6, "D_EPM": -0.6},
-    ],
-    "NYK": [
-        {"Posición": "PG", "Jugador": "Jalen Brunson", "Minutos_Esperados": 36.0, "O_EPM": 5.4, "D_EPM": -0.4},
-        {"Posición": "SG", "Jugador": "Mikal Bridges", "Minutos_Esperados": 35.0, "O_EPM": 1.2, "D_EPM": 0.9},
-        {"Posición": "SF", "Jugador": "OG Anunoby", "Minutos_Esperados": 35.0, "O_EPM": 1.0, "D_EPM": 3.1},
-        {"Posición": "PF", "Jugador": "Josh Hart", "Minutos_Esperados": 34.0, "O_EPM": 0.4, "D_EPM": 1.5},
-        {"Posición": "C", "Jugador": "Karl-Anthony Towns", "Minutos_Esperados": 34.0, "O_EPM": 3.1, "D_EPM": 0.5},
-        {"Posición": "BENCH", "Jugador": "McBride / Achiuwa / Payne", "Minutos_Esperados": 66.0, "O_EPM": -0.4, "D_EPM": 0.6},
-    ],
-    "PHI": [
-        {"Posición": "PG", "Jugador": "Tyrese Maxey", "Minutos_Esperados": 36.0, "O_EPM": 3.8, "D_EPM": -0.3},
-        {"Posición": "SG", "Jugador": "Kelly Oubre Jr.", "Minutos_Esperados": 31.0, "O_EPM": -0.3, "D_EPM": 0.4},
-        {"Posición": "SF", "Jugador": "Paul George", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 1.6},
-        {"Posición": "PF", "Jugador": "Caleb Martin", "Minutos_Esperados": 29.0, "O_EPM": -0.6, "D_EPM": 0.7},
-        {"Posición": "C", "Jugador": "Joel Embiid", "Minutos_Esperados": 34.0, "O_EPM": 5.6, "D_EPM": 3.2},
-        {"Posición": "BENCH", "Jugador": "Lowry / Drummond / McCain", "Minutos_Esperados": 76.0, "O_EPM": -1.4, "D_EPM": -0.2},
-    ],
-    "TOR": [
-        {"Posición": "PG", "Jugador": "Immanuel Quickley", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": -0.3},
-        {"Posición": "SG", "Jugador": "Gradey Dick", "Minutos_Esperados": 29.0, "O_EPM": 0.2, "D_EPM": -1.4},
-        {"Posición": "SF", "Jugador": "RJ Barrett", "Minutos_Esperados": 33.0, "O_EPM": 1.1, "D_EPM": -0.9},
-        {"Posición": "PF", "Jugador": "Scottie Barnes", "Minutos_Esperados": 35.0, "O_EPM": 1.8, "D_EPM": 1.2},
-        {"Posición": "C", "Jugador": "Jakob Poeltl", "Minutos_Esperados": 30.0, "O_EPM": 0.3, "D_EPM": 1.4},
-        {"Posición": "BENCH", "Jugador": "Boucher / Agbaji / Mitchell", "Minutos_Esperados": 80.0, "O_EPM": -1.8, "D_EPM": -1.1},
-    ],
-    "CHI": [
-        {"Posición": "PG", "Jugador": "Josh Giddey", "Minutos_Esperados": 31.0, "O_EPM": 0.6, "D_EPM": -0.8},
-        {"Posición": "SG", "Jugador": "Coby White", "Minutos_Esperados": 34.0, "O_EPM": 1.7, "D_EPM": -0.7},
-        {"Posición": "SF", "Jugador": "Zach LaVine", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": -1.1},
-        {"Posición": "PF", "Jugador": "Patrick Williams", "Minutos_Esperados": 28.0, "O_EPM": -1.3, "D_EPM": 0.5},
-        {"Posición": "C", "Jugador": "Nikola Vucevic", "Minutos_Esperados": 32.0, "O_EPM": 0.8, "D_EPM": -0.6},
-        {"Posición": "BENCH", "Jugador": "Dosunmu / Ball / Smith", "Minutos_Esperados": 81.0, "O_EPM": -1.1, "D_EPM": -0.2},
-    ],
-    "CLE": [
-        {"Posición": "PG", "Jugador": "Darius Garland", "Minutos_Esperados": 32.0, "O_EPM": 2.4, "D_EPM": -0.2},
-        {"Posición": "SG", "Jugador": "Donovan Mitchell", "Minutos_Esperados": 35.0, "O_EPM": 4.9, "D_EPM": 1.1},
-        {"Posición": "SF", "Jugador": "Max Strus", "Minutos_Esperados": 29.0, "O_EPM": 0.8, "D_EPM": 0.4},
-        {"Posición": "PF", "Jugador": "Evan Mobley", "Minutos_Esperados": 33.0, "O_EPM": 1.6, "D_EPM": 3.0},
-        {"Posición": "C", "Jugador": "Jarrett Allen", "Minutos_Esperados": 32.0, "O_EPM": 1.5, "D_EPM": 2.4},
-        {"Posición": "BENCH", "Jugador": "LeVert / Jerome / Wade", "Minutos_Esperados": 79.0, "O_EPM": 0.7, "D_EPM": 0.6},
-    ],
-    "DET": [
-        {"Posición": "PG", "Jugador": "Cade Cunningham", "Minutos_Esperados": 35.0, "O_EPM": 2.2, "D_EPM": -0.9},
-        {"Posición": "SG", "Jugador": "Jaden Ivey", "Minutos_Esperados": 31.0, "O_EPM": 0.3, "D_EPM": -1.4},
-        {"Posición": "SF", "Jugador": "Tim Hardaway Jr.", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": -1.5},
-        {"Posición": "PF", "Jugador": "Tobias Harris", "Minutos_Esperados": 32.0, "O_EPM": 0.4, "D_EPM": -0.3},
-        {"Posición": "C", "Jugador": "Jalen Duren", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": -0.6},
-        {"Posición": "BENCH", "Jugador": "Beasley / Thompson / Stewart", "Minutos_Esperados": 84.0, "O_EPM": -2.2, "D_EPM": -0.7},
-    ],
-    "IND": [
-        {"Posición": "PG", "Jugador": "Tyrese Haliburton", "Minutos_Esperados": 35.0, "O_EPM": 5.1, "D_EPM": -1.3},
-        {"Posición": "SG", "Jugador": "Andrew Nembhard", "Minutos_Esperados": 30.0, "O_EPM": 0.8, "D_EPM": 0.9},
-        {"Posición": "SF", "Jugador": "Aaron Nesmith", "Minutos_Esperados": 29.0, "O_EPM": 0.7, "D_EPM": 0.6},
-        {"Posición": "PF", "Jugador": "Pascal Siakam", "Minutos_Esperados": 34.0, "O_EPM": 2.7, "D_EPM": 0.4},
-        {"Posición": "C", "Jugador": "Myles Turner", "Minutos_Esperados": 30.0, "O_EPM": 1.4, "D_EPM": 1.1},
-        {"Posición": "BENCH", "Jugador": "Mathurin / McConnell / Toppin", "Minutos_Esperados": 82.0, "O_EPM": 0.8, "D_EPM": -1.2},
-    ],
-    "MIL": [
-        {"Posición": "PG", "Jugador": "Damian Lillard", "Minutos_Esperados": 35.0, "O_EPM": 3.9, "D_EPM": -1.2},
-        {"Posición": "SG", "Jugador": "Gary Trent Jr.", "Minutos_Esperados": 30.0, "O_EPM": 0.5, "D_EPM": -0.3},
-        {"Posición": "SF", "Jugador": "Taurean Prince", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": 0.2},
-        {"Posición": "PF", "Jugador": "Giannis Antetokounmpo", "Minutos_Esperados": 36.0, "O_EPM": 5.5, "D_EPM": 2.3},
-        {"Posición": "C", "Jugador": "Brook Lopez", "Minutos_Esperados": 30.0, "O_EPM": 0.3, "D_EPM": 1.8},
-        {"Posición": "BENCH", "Jugador": "Portis / Wright / Connaughton", "Minutos_Esperados": 81.0, "O_EPM": -0.9, "D_EPM": -0.4},
-    ],
-    "DEN": [
-        {"Posición": "PG", "Jugador": "Jamal Murray", "Minutos_Esperados": 35.0, "O_EPM": 3.2, "D_EPM": -0.1},
-        {"Posición": "SG", "Jugador": "Christian Braun", "Minutos_Esperados": 31.0, "O_EPM": 0.3, "D_EPM": 1.1},
-        {"Posición": "SF", "Jugador": "Michael Porter Jr.", "Minutos_Esperados": 34.0, "O_EPM": 2.0, "D_EPM": 0.3},
-        {"Posición": "PF", "Jugador": "Aaron Gordon", "Minutos_Esperados": 33.0, "O_EPM": 1.3, "D_EPM": 1.4},
-        {"Posición": "C", "Jugador": "Nikola Jokic", "Minutos_Esperados": 36.0, "O_EPM": 6.8, "D_EPM": 2.2},
-        {"Posición": "BENCH", "Jugador": "Westbrook / Watson / Strawther", "Minutos_Esperados": 71.0, "O_EPM": -1.4, "D_EPM": 0.2},
-    ],
-    "MIN": [
-        {"Posición": "PG", "Jugador": "Mike Conley", "Minutos_Esperados": 29.0, "O_EPM": 1.8, "D_EPM": 0.7},
-        {"Posición": "SG", "Jugador": "Anthony Edwards", "Minutos_Esperados": 36.0, "O_EPM": 4.2, "D_EPM": 1.4},
-        {"Posición": "SF", "Jugador": "Jaden McDaniels", "Minutos_Esperados": 31.0, "O_EPM": -0.6, "D_EPM": 2.2},
-        {"Posición": "PF", "Jugador": "Julius Randle", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": 0.1},
-        {"Posición": "C", "Jugador": "Rudy Gobert", "Minutos_Esperados": 34.0, "O_EPM": 0.1, "D_EPM": 3.8},
-        {"Posición": "BENCH", "Jugador": "Reid / DiVincenzo / Alexander-Walker", "Minutos_Esperados": 76.0, "O_EPM": 0.4, "D_EPM": 1.3},
-    ],
-    "OKC": [
-        {"Posición": "PG", "Jugador": "Shai Gilgeous-Alexander", "Minutos_Esperados": 35.0, "O_EPM": 6.1, "D_EPM": 2.5},
-        {"Posición": "SG", "Jugador": "Luguentz Dort", "Minutos_Esperados": 30.0, "O_EPM": 0.1, "D_EPM": 2.2},
-        {"Posición": "SF", "Jugador": "Alex Caruso", "Minutos_Esperados": 28.0, "O_EPM": 0.3, "D_EPM": 3.4},
-        {"Posición": "PF", "Jugador": "Jalen Williams", "Minutos_Esperados": 34.0, "O_EPM": 3.1, "D_EPM": 1.6},
-        {"Posición": "C", "Jugador": "Chet Holmgren", "Minutos_Esperados": 32.0, "O_EPM": 2.2, "D_EPM": 3.5},
-        {"Posición": "BENCH", "Jugador": "Wallace / Joe / Wiggins", "Minutos_Esperados": 81.0, "O_EPM": 0.6, "D_EPM": 1.0},
-    ],
-    "POR": [
-        {"Posición": "PG", "Jugador": "Scoot Henderson", "Minutos_Esperados": 30.0, "O_EPM": -1.4, "D_EPM": -1.2},
-        {"Posición": "SG", "Jugador": "Anfernee Simons", "Minutos_Esperados": 34.0, "O_EPM": 1.8, "D_EPM": -2.1},
-        {"Posición": "SF", "Jugador": "Deni Avdija", "Minutos_Esperados": 31.0, "O_EPM": 0.4, "D_EPM": 0.8},
-        {"Posición": "PF", "Jugador": "Jerami Grant", "Minutos_Esperados": 33.0, "O_EPM": 0.9, "D_EPM": -0.7},
-        {"Posición": "C", "Jugador": "Deandre Ayton", "Minutos_Esperados": 31.0, "O_EPM": 0.1, "D_EPM": 0.5},
-        {"Posición": "BENCH", "Jugador": "Sharpe / Clingan / Camara", "Minutos_Esperados": 81.0, "O_EPM": -2.1, "D_EPM": -0.4},
-    ],
-    "UTA": [
-        {"Posición": "PG", "Jugador": "Keyonte George", "Minutos_Esperados": 31.0, "O_EPM": 0.5, "D_EPM": -1.9},
-        {"Posición": "SG", "Jugador": "Collin Sexton", "Minutos_Esperados": 30.0, "O_EPM": 2.1, "D_EPM": -1.5},
-        {"Posición": "SF", "Jugador": "Lauri Markkanen", "Minutos_Esperados": 34.0, "O_EPM": 3.5, "D_EPM": 0.2},
-        {"Posición": "PF", "Jugador": "Taylor Hendricks", "Minutos_Esperados": 27.0, "O_EPM": -1.1, "D_EPM": 0.4},
-        {"Posición": "C", "Jugador": "Walker Kessler", "Minutos_Esperados": 29.0, "O_EPM": -0.2, "D_EPM": 2.3},
-        {"Posición": "BENCH", "Jugador": "Clarkson / Collins / Filipowski", "Minutos_Esperados": 89.0, "O_EPM": -1.2, "D_EPM": -1.8},
-    ],
-    "GSW": [
-        {"Posición": "PG", "Jugador": "Stephen Curry", "Minutos_Esperados": 34.0, "O_EPM": 5.6, "D_EPM": -0.3},
-        {"Posición": "SG", "Jugador": "Brandin Podziemski", "Minutos_Esperados": 29.0, "O_EPM": 0.6, "D_EPM": 0.8},
-        {"Posición": "SF", "Jugador": "Andrew Wiggins", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": 0.9},
-        {"Posición": "PF", "Jugador": "Jonathan Kuminga", "Minutos_Esperados": 30.0, "O_EPM": 1.1, "D_EPM": 0.1},
-        {"Posición": "C", "Jugador": "Draymond Green", "Minutos_Esperados": 30.0, "O_EPM": 0.4, "D_EPM": 3.3},
-        {"Posición": "BENCH", "Jugador": "Hield / Melton / Jackson-Davis", "Minutos_Esperados": 87.0, "O_EPM": 0.3, "D_EPM": 0.5},
-    ],
-    "LAC": [
-        {"Posición": "PG", "Jugador": "James Harden", "Minutos_Esperados": 35.0, "O_EPM": 3.7, "D_EPM": 0.1},
-        {"Posición": "SG", "Jugador": "Norman Powell", "Minutos_Esperados": 33.0, "O_EPM": 2.2, "D_EPM": -0.4},
-        {"Posición": "SF", "Jugador": "Terance Mann", "Minutos_Esperados": 29.0, "O_EPM": -0.2, "D_EPM": 0.9},
-        {"Posición": "PF", "Jugador": "Derrick Jones Jr.", "Minutos_Esperados": 28.0, "O_EPM": -0.3, "D_EPM": 1.4},
-        {"Posición": "C", "Jugador": "Ivica Zubac", "Minutos_Esperados": 32.0, "O_EPM": 1.2, "D_EPM": 1.9},
-        {"Posición": "BENCH", "Jugador": "Dunn / Coffey / Batum", "Minutos_Esperados": 83.0, "O_EPM": -0.8, "D_EPM": 0.8},
-    ],
-    "LAL": [
-        {"Posición": "PG", "Jugador": "D'Angelo Russell", "Minutos_Esperados": 31.0, "O_EPM": 1.8, "D_EPM": -1.1},
-        {"Posición": "SG", "Jugador": "Austin Reaves", "Minutos_Esperados": 34.0, "O_EPM": 1.9, "D_EPM": -0.5},
-        {"Posición": "SF", "Jugador": "Rui Hachimura", "Minutos_Esperados": 30.0, "O_EPM": 0.6, "D_EPM": -0.6},
-        {"Posición": "PF", "Jugador": "LeBron James", "Minutos_Esperados": 35.0, "O_EPM": 4.4, "D_EPM": 0.9},
-        {"Posición": "C", "Jugador": "Anthony Davis", "Minutos_Esperados": 36.0, "O_EPM": 3.1, "D_EPM": 3.7},
-        {"Posición": "BENCH", "Jugador": "Vincent / Knecht / Hayes", "Minutos_Esperados": 74.0, "O_EPM": -1.6, "D_EPM": -0.4},
-    ],
-    "PHX": [
-        {"Posición": "PG", "Jugador": "Tyus Jones", "Minutos_Esperados": 30.0, "O_EPM": 1.7, "D_EPM": -0.8},
-        {"Posición": "SG", "Jugador": "Devin Booker", "Minutos_Esperados": 36.0, "O_EPM": 4.3, "D_EPM": -0.2},
-        {"Posición": "SF", "Jugador": "Bradley Beal", "Minutos_Esperados": 33.0, "O_EPM": 1.5, "D_EPM": -0.4},
-        {"Posición": "PF", "Jugador": "Kevin Durant", "Minutos_Esperados": 36.0, "O_EPM": 4.5, "D_EPM": 1.3},
-        {"Posición": "C", "Jugador": "Jusuf Nurkic", "Minutos_Esperados": 28.0, "O_EPM": 0.2, "D_EPM": 1.5},
-        {"Posición": "BENCH", "Jugador": "Allen / O'Neale / Plumlee", "Minutos_Esperados": 77.0, "O_EPM": -0.5, "D_EPM": 0.2},
-    ],
-    "SAC": [
-        {"Posición": "PG", "Jugador": "De'Aaron Fox", "Minutos_Esperados": 36.0, "O_EPM": 3.8, "D_EPM": 0.8},
-        {"Posición": "SG", "Jugador": "Kevin Huerter", "Minutos_Esperados": 28.0, "O_EPM": 0.6, "D_EPM": -0.7},
-        {"Posición": "SF", "Jugador": "DeMar DeRozan", "Minutos_Esperados": 35.0, "O_EPM": 2.4, "D_EPM": -0.3},
-        {"Posición": "PF", "Jugador": "Keegan Murray", "Minutos_Esperados": 34.0, "O_EPM": 0.9, "D_EPM": 1.1},
-        {"Posición": "C", "Jugador": "Domantas Sabonis", "Minutos_Esperados": 36.0, "O_EPM": 3.3, "D_EPM": 0.9},
-        {"Posición": "BENCH", "Jugador": "Monk / Ellis / Lyles", "Minutos_Esperados": 71.0, "O_EPM": -0.6, "D_EPM": -0.2},
-    ],
-    "ATL": [
-        {"Posición": "PG", "Jugador": "Trae Young", "Minutos_Esperados": 36.0, "O_EPM": 4.6, "D_EPM": -2.2},
-        {"Posición": "SG", "Jugador": "Dyson Daniels", "Minutos_Esperados": 30.0, "O_EPM": -0.5, "D_EPM": 2.4},
-        {"Posición": "SF", "Jugador": "Zaccharie Risacher", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": 0.2},
-        {"Posición": "PF", "Jugador": "Jalen Johnson", "Minutos_Esperados": 35.0, "O_EPM": 2.1, "D_EPM": 0.9},
-        {"Posición": "C", "Jugador": "Clint Capela", "Minutos_Esperados": 27.0, "O_EPM": 0.3, "D_EPM": 1.3},
-        {"Posición": "BENCH", "Jugador": "Bogdanovic / Hunter / Okongwu", "Minutos_Esperados": 84.0, "O_EPM": 0.2, "D_EPM": -1.3},
-    ],
-    "CHA": [
-        {"Posición": "PG", "Jugador": "LaMelo Ball", "Minutos_Esperados": 34.0, "O_EPM": 3.6, "D_EPM": -1.4},
-        {"Posición": "SG", "Jugador": "Josh Green", "Minutos_Esperados": 28.0, "O_EPM": -0.6, "D_EPM": 0.3},
-        {"Posición": "SF", "Jugador": "Brandon Miller", "Minutos_Esperados": 34.0, "O_EPM": 1.4, "D_EPM": -0.8},
-        {"Posición": "PF", "Jugador": "Miles Bridges", "Minutos_Esperados": 34.0, "O_EPM": 0.9, "D_EPM": -0.9},
-        {"Posición": "C", "Jugador": "Mark Williams", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": 1.1},
-        {"Posición": "BENCH", "Jugador": "Mann / Micic / Richards", "Minutos_Esperados": 81.0, "O_EPM": -2.2, "D_EPM": -1.2},
-    ],
-    "MIA": [
-        {"Posición": "PG", "Jugador": "Terry Rozier", "Minutos_Esperados": 31.0, "O_EPM": 0.8, "D_EPM": -0.4},
-        {"Posición": "SG", "Jugador": "Tyler Herro", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": -0.3},
-        {"Posición": "SF", "Jugador": "Jimmy Butler", "Minutos_Esperados": 34.0, "O_EPM": 3.6, "D_EPM": 1.9},
-        {"Posición": "PF", "Jugador": "Nikola Jovic", "Minutos_Esperados": 26.0, "O_EPM": 0.2, "D_EPM": 0.4},
-        {"Posición": "C", "Jugador": "Bam Adebayo", "Minutos_Esperados": 35.0, "O_EPM": 1.1, "D_EPM": 3.2},
-        {"Posición": "BENCH", "Jugador": "Jaquez Jr. / Robinson / Highsmith", "Minutos_Esperados": 80.0, "O_EPM": -1.1, "D_EPM": 0.9},
-    ],
-    "ORL": [
-        {"Posición": "PG", "Jugador": "Jalen Suggs", "Minutos_Esperados": 31.0, "O_EPM": 0.9, "D_EPM": 3.1},
-        {"Posición": "SG", "Jugador": "Kentavious Caldwell-Pope", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": 1.8},
-        {"Posición": "SF", "Jugador": "Franz Wagner", "Minutos_Esperados": 34.0, "O_EPM": 2.6, "D_EPM": 1.6},
-        {"Posición": "PF", "Jugador": "Paolo Banchero", "Minutos_Esperados": 35.0, "O_EPM": 2.8, "D_EPM": 0.8},
-        {"Posición": "C", "Jugador": "Wendell Carter Jr.", "Minutos_Esperados": 29.0, "O_EPM": 0.4, "D_EPM": 1.5},
-        {"Posición": "BENCH", "Jugador": "Isaac / Anthony / Bitadze", "Minutos_Esperados": 81.0, "O_EPM": -1.6, "D_EPM": 1.4},
-    ],
-    "WAS": [
-        {"Posición": "PG", "Jugador": "Jordan Poole", "Minutos_Esperados": 32.0, "O_EPM": 0.4, "D_EPM": -2.3},
-        {"Posición": "SG", "Jugador": "Malcolm Brogdon", "Minutos_Esperados": 28.0, "O_EPM": 0.6, "D_EPM": -0.9},
-        {"Posición": "SF", "Jugador": "Bilal Coulibaly", "Minutos_Esperados": 30.0, "O_EPM": -1.2, "D_EPM": 0.7},
-        {"Posición": "PF", "Jugador": "Kyle Kuzma", "Minutos_Esperados": 33.0, "O_EPM": 0.5, "D_EPM": -1.4},
-        {"Posición": "C", "Jugador": "Alex Sarr", "Minutos_Esperados": 28.0, "O_EPM": -1.6, "D_EPM": 0.6},
-        {"Posición": "BENCH", "Jugador": "Valanciunas / Kispert / Carrington", "Minutos_Esperados": 89.0, "O_EPM": -1.8, "D_EPM": -1.5},
-    ],
-    "DAL": [
-        {"Posición": "PG", "Jugador": "Luka Doncic", "Minutos_Esperados": 37.0, "O_EPM": 6.4, "D_EPM": 0.4},
-        {"Posición": "SG", "Jugador": "Kyrie Irving", "Minutos_Esperados": 35.0, "O_EPM": 4.1, "D_EPM": 0.2},
-        {"Posición": "SF", "Jugador": "Klay Thompson", "Minutos_Esperados": 30.0, "O_EPM": 1.1, "D_EPM": -0.5},
-        {"Posición": "PF", "Jugador": "P.J. Washington", "Minutos_Esperados": 32.0, "O_EPM": 0.2, "D_EPM": 1.2},
-        {"Posición": "C", "Jugador": "Daniel Gafford", "Minutos_Esperados": 26.0, "O_EPM": 1.0, "D_EPM": 1.6},
-        {"Posición": "BENCH", "Jugador": "Lively II / Grimes / Marshall", "Minutos_Esperados": 80.0, "O_EPM": -0.6, "D_EPM": 0.7},
-    ],
-    "HOU": [
-        {"Posición": "PG", "Jugador": "Fred VanVleet", "Minutos_Esperados": 35.0, "O_EPM": 2.3, "D_EPM": 1.6},
-        {"Posición": "SG", "Jugador": "Jalen Green", "Minutos_Esperados": 33.0, "O_EPM": 1.5, "D_EPM": -0.2},
-        {"Posición": "SF", "Jugador": "Dillon Brooks", "Minutos_Esperados": 31.0, "O_EPM": -0.6, "D_EPM": 1.4},
-        {"Posición": "PF", "Jugador": "Jabari Smith Jr.", "Minutos_Esperados": 32.0, "O_EPM": 0.3, "D_EPM": 1.3},
-        {"Posición": "C", "Jugador": "Alperen Sengun", "Minutos_Esperados": 33.0, "O_EPM": 3.1, "D_EPM": 1.1},
-        {"Posición": "BENCH", "Jugador": "Thompson / Eason / Sheppard", "Minutos_Esperados": 76.0, "O_EPM": -0.8, "D_EPM": 1.5},
-    ],
-    "MEM": [
-        {"Posición": "PG", "Jugador": "Ja Morant", "Minutos_Esperados": 34.0, "O_EPM": 3.9, "D_EPM": -0.3},
-        {"Posición": "SG", "Jugador": "Desmond Bane", "Minutos_Esperados": 34.0, "O_EPM": 2.8, "D_EPM": 0.6},
-        {"Posición": "SF", "Jugador": "Marcus Smart", "Minutos_Esperados": 29.0, "O_EPM": -0.4, "D_EPM": 1.9},
-        {"Posición": "PF", "Jugador": "Jaren Jackson Jr.", "Minutos_Esperados": 32.0, "O_EPM": 1.5, "D_EPM": 2.8},
-        {"Posición": "C", "Jugador": "Zach Edey", "Minutos_Esperados": 26.0, "O_EPM": 0.4, "D_EPM": 1.1},
-        {"Posición": "BENCH", "Jugador": "Aldama / Pippen Jr. / Clarke", "Minutos_Esperados": 85.0, "O_EPM": -0.6, "D_EPM": 0.3},
-    ],
-    "NOP": [
-        {"Posición": "PG", "Jugador": "Dejounte Murray", "Minutos_Esperados": 34.0, "O_EPM": 1.7, "D_EPM": 0.9},
-        {"Posición": "SG", "Jugador": "CJ McCollum", "Minutos_Esperados": 32.0, "O_EPM": 1.9, "D_EPM": -0.6},
-        {"Posición": "SF", "Jugador": "Brandon Ingram", "Minutos_Esperados": 34.0, "O_EPM": 2.2, "D_EPM": -0.2},
-        {"Posición": "PF", "Jugador": "Herbert Jones", "Minutos_Esperados": 31.0, "O_EPM": 0.2, "D_EPM": 2.9},
-        {"Posición": "C", "Jugador": "Zion Williamson", "Minutos_Esperados": 33.0, "O_EPM": 3.4, "D_EPM": 0.4},
-        {"Posición": "BENCH", "Jugador": "Murphy III / Alvarado / Missi", "Minutos_Esperados": 76.0, "O_EPM": -0.9, "D_EPM": 0.2},
-    ],
-    "SAS": [
-        {"Posición": "PG", "Jugador": "Chris Paul", "Minutos_Esperados": 28.0, "O_EPM": 1.6, "D_EPM": 0.4},
-        {"Posición": "SG", "Jugador": "Devin Vassell", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": 0.1},
-        {"Posición": "SF", "Jugador": "Harrison Barnes", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": -0.4},
-        {"Posición": "PF", "Jugador": "Jeremy Sochan", "Minutos_Esperados": 30.0, "O_EPM": -0.8, "D_EPM": 0.7},
-        {"Posición": "C", "Jugador": "Victor Wembanyama", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 4.5},
-        {"Posición": "BENCH", "Jugador": "Johnson / Castle / Tre Jones", "Minutos_Esperados": 86.0, "O_EPM": -1.4, "D_EPM": -0.1},
-    ],
+    "BOS": [{"Posición": "PG", "Jugador": "Jrue Holiday", "Minutos_Esperados": 33.0, "O_EPM": 1.4, "D_EPM": 2.3}, {"Posición": "SG", "Jugador": "Derrick White", "Minutos_Esperados": 34.0, "O_EPM": 2.6, "D_EPM": 2.4}, {"Posición": "SF", "Jugador": "Jaylen Brown", "Minutos_Esperados": 35.0, "O_EPM": 2.8, "D_EPM": 0.9}, {"Posición": "PF", "Jugador": "Jayson Tatum", "Minutos_Esperados": 36.0, "O_EPM": 4.8, "D_EPM": 1.5}, {"Posición": "C", "Jugador": "Kristaps Porzingis", "Minutos_Esperados": 30.0, "O_EPM": 2.9, "D_EPM": 2.1}, {"Posición": "BENCH", "Jugador": "Pritchard / Horford / Hauser", "Minutos_Esperados": 72.0, "O_EPM": 0.9, "D_EPM": 0.6}],
+    "BKN": [{"Posición": "PG", "Jugador": "Dennis Schroder", "Minutos_Esperados": 32.0, "O_EPM": 0.5, "D_EPM": -0.6}, {"Posición": "SG", "Jugador": "Cam Thomas", "Minutos_Esperados": 34.0, "O_EPM": 1.6, "D_EPM": -1.8}, {"Posición": "SF", "Jugador": "Cameron Johnson", "Minutos_Esperados": 31.0, "O_EPM": 1.1, "D_EPM": -0.2}, {"Posición": "PF", "Jugador": "Dorian Finney-Smith", "Minutos_Esperados": 29.0, "O_EPM": -1.2, "D_EPM": 0.8}, {"Posición": "C", "Jugador": "Nic Claxton", "Minutos_Esperados": 30.0, "O_EPM": -0.5, "D_EPM": 1.9}, {"Posición": "BENCH", "Jugador": "Simmons / Clowney / Wilson", "Minutos_Esperados": 84.0, "O_EPM": -1.6, "D_EPM": -0.6}],
+    "NYK": [{"Posición": "PG", "Jugador": "Jalen Brunson", "Minutos_Esperados": 36.0, "O_EPM": 5.4, "D_EPM": -0.4}, {"Posición": "SG", "Jugador": "Mikal Bridges", "Minutos_Esperados": 35.0, "O_EPM": 1.2, "D_EPM": 0.9}, {"Posición": "SF", "Jugador": "OG Anunoby", "Minutos_Esperados": 35.0, "O_EPM": 1.0, "D_EPM": 3.1}, {"Posición": "PF", "Jugador": "Josh Hart", "Minutos_Esperados": 34.0, "O_EPM": 0.4, "D_EPM": 1.5}, {"Posición": "C", "Jugador": "Karl-Anthony Towns", "Minutos_Esperados": 34.0, "O_EPM": 3.1, "D_EPM": 0.5}, {"Posición": "BENCH", "Jugador": "McBride / Achiuwa / Payne", "Minutos_Esperados": 66.0, "O_EPM": -0.4, "D_EPM": 0.6}],
+    "PHI": [{"Posición": "PG", "Jugador": "Tyrese Maxey", "Minutos_Esperados": 36.0, "O_EPM": 3.8, "D_EPM": -0.3}, {"Posición": "SG", "Jugador": "Kelly Oubre Jr.", "Minutos_Esperados": 31.0, "O_EPM": -0.3, "D_EPM": 0.4}, {"Posición": "SF", "Jugador": "Paul George", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 1.6}, {"Posición": "PF", "Jugador": "Caleb Martin", "Minutos_Esperados": 29.0, "O_EPM": -0.6, "D_EPM": 0.7}, {"Posición": "C", "Jugador": "Joel Embiid", "Minutos_Esperados": 34.0, "O_EPM": 5.6, "D_EPM": 3.2}, {"Posición": "BENCH", "Jugador": "Lowry / Drummond / McCain", "Minutos_Esperados": 76.0, "O_EPM": -1.4, "D_EPM": -0.2}],
+    "TOR": [{"Posición": "PG", "Jugador": "Immanuel Quickley", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": -0.3}, {"Posición": "SG", "Jugador": "Gradey Dick", "Minutos_Esperados": 29.0, "O_EPM": 0.2, "D_EPM": -1.4}, {"Posición": "SF", "Jugador": "RJ Barrett", "Minutos_Esperados": 33.0, "O_EPM": 1.1, "D_EPM": -0.9}, {"Posición": "PF", "Jugador": "Scottie Barnes", "Minutos_Esperados": 35.0, "O_EPM": 1.8, "D_EPM": 1.2}, {"Posición": "C", "Jugador": "Jakob Poeltl", "Minutos_Esperados": 30.0, "O_EPM": 0.3, "D_EPM": 1.4}, {"Posición": "BENCH", "Jugador": "Boucher / Agbaji / Mitchell", "Minutos_Esperados": 80.0, "O_EPM": -1.8, "D_EPM": -1.1}],
+    "CHI": [{"Posición": "PG", "Jugador": "Josh Giddey", "Minutos_Esperados": 31.0, "O_EPM": 0.6, "D_EPM": -0.8}, {"Posición": "SG", "Jugador": "Coby White", "Minutos_Esperados": 34.0, "O_EPM": 1.7, "D_EPM": -0.7}, {"Posición": "SF", "Jugador": "Zach LaVine", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": -1.1}, {"Posición": "PF", "Jugador": "Patrick Williams", "Minutos_Esperados": 28.0, "O_EPM": -1.3, "D_EPM": 0.5}, {"Posición": "C", "Jugador": "Nikola Vucevic", "Minutos_Esperados": 32.0, "O_EPM": 0.8, "D_EPM": -0.6}, {"Posición": "BENCH", "Jugador": "Dosunmu / Ball / Smith", "Minutos_Esperados": 81.0, "O_EPM": -1.1, "D_EPM": -0.2}],
+    "CLE": [{"Posición": "PG", "Jugador": "Darius Garland", "Minutos_Esperados": 32.0, "O_EPM": 2.4, "D_EPM": -0.2}, {"Posición": "SG", "Jugador": "Donovan Mitchell", "Minutos_Esperados": 35.0, "O_EPM": 4.9, "D_EPM": 1.1}, {"Posición": "SF", "Jugador": "Max Strus", "Minutos_Esperados": 29.0, "O_EPM": 0.8, "D_EPM": 0.4}, {"Posición": "PF", "Jugador": "Evan Mobley", "Minutos_Esperados": 33.0, "O_EPM": 1.6, "D_EPM": 3.0}, {"Posición": "C", "Jugador": "Jarrett Allen", "Minutos_Esperados": 32.0, "O_EPM": 1.5, "D_EPM": 2.4}, {"Posición": "BENCH", "Jugador": "LeVert / Jerome / Wade", "Minutos_Esperados": 79.0, "O_EPM": 0.7, "D_EPM": 0.6}],
+    "DET": [{"Posición": "PG", "Jugador": "Cade Cunningham", "Minutos_Esperados": 35.0, "O_EPM": 2.2, "D_EPM": -0.9}, {"Posición": "SG", "Jugador": "Jaden Ivey", "Minutos_Esperados": 31.0, "O_EPM": 0.3, "D_EPM": -1.4}, {"Posición": "SF", "Jugador": "Tim Hardaway Jr.", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": -1.5}, {"Posición": "PF", "Jugador": "Tobias Harris", "Minutos_Esperados": 32.0, "O_EPM": 0.4, "D_EPM": -0.3}, {"Posición": "C", "Jugador": "Jalen Duren", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": -0.6}, {"Posición": "BENCH", "Jugador": "Beasley / Thompson / Stewart", "Minutos_Esperados": 84.0, "O_EPM": -2.2, "D_EPM": -0.7}],
+    "IND": [{"Posición": "PG", "Jugador": "Tyrese Haliburton", "Minutos_Esperados": 35.0, "O_EPM": 5.1, "D_EPM": -1.3}, {"Posición": "SG", "Jugador": "Andrew Nembhard", "Minutos_Esperados": 30.0, "O_EPM": 0.8, "D_EPM": 0.9}, {"Posición": "SF", "Jugador": "Aaron Nesmith", "Minutos_Esperados": 29.0, "O_EPM": 0.7, "D_EPM": 0.6}, {"Posición": "PF", "Jugador": "Pascal Siakam", "Minutos_Esperados": 34.0, "O_EPM": 2.7, "D_EPM": 0.4}, {"Posición": "C", "Jugador": "Myles Turner", "Minutos_Esperados": 30.0, "O_EPM": 1.4, "D_EPM": 1.1}, {"Posición": "BENCH", "Jugador": "Mathurin / McConnell / Toppin", "Minutos_Esperados": 82.0, "O_EPM": 0.8, "D_EPM": -1.2}],
+    "MIL": [{"Posición": "PG", "Jugador": "Damian Lillard", "Minutos_Esperados": 35.0, "O_EPM": 3.9, "D_EPM": -1.2}, {"Posición": "SG", "Jugador": "Gary Trent Jr.", "Minutos_Esperados": 30.0, "O_EPM": 0.5, "D_EPM": -0.3}, {"Posición": "SF", "Jugador": "Taurean Prince", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": 0.2}, {"Posición": "PF", "Jugador": "Giannis Antetokounmpo", "Minutos_Esperados": 36.0, "O_EPM": 5.5, "D_EPM": 2.3}, {"Posición": "C", "Jugador": "Brook Lopez", "Minutos_Esperados": 30.0, "O_EPM": 0.3, "D_EPM": 1.8}, {"Posición": "BENCH", "Jugador": "Portis / Wright / Connaughton", "Minutos_Esperados": 81.0, "O_EPM": -0.9, "D_EPM": -0.4}],
+    "DEN": [{"Posición": "PG", "Jugador": "Jamal Murray", "Minutos_Esperados": 35.0, "O_EPM": 3.2, "D_EPM": -0.1}, {"Posición": "SG", "Jugador": "Christian Braun", "Minutos_Esperados": 31.0, "O_EPM": 0.3, "D_EPM": 1.1}, {"Posición": "SF", "Jugador": "Michael Porter Jr.", "Minutos_Esperados": 34.0, "O_EPM": 2.0, "D_EPM": 0.3}, {"Posición": "PF", "Jugador": "Aaron Gordon", "Minutos_Esperados": 33.0, "O_EPM": 1.3, "D_EPM": 1.4}, {"Posición": "C", "Jugador": "Nikola Jokic", "Minutos_Esperados": 36.0, "O_EPM": 6.8, "D_EPM": 2.2}, {"Posición": "BENCH", "Jugador": "Westbrook / Watson / Strawther", "Minutos_Esperados": 71.0, "O_EPM": -1.4, "D_EPM": 0.2}],
+    "MIN": [{"Posición": "PG", "Jugador": "Mike Conley", "Minutos_Esperados": 29.0, "O_EPM": 1.8, "D_EPM": 0.7}, {"Posición": "SG", "Jugador": "Anthony Edwards", "Minutos_Esperados": 36.0, "O_EPM": 4.2, "D_EPM": 1.4}, {"Posición": "SF", "Jugador": "Jaden McDaniels", "Minutos_Esperados": 31.0, "O_EPM": -0.6, "D_EPM": 2.2}, {"Posición": "PF", "Jugador": "Julius Randle", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": 0.1}, {"Posición": "C", "Jugador": "Rudy Gobert", "Minutos_Esperados": 34.0, "O_EPM": 0.1, "D_EPM": 3.8}, {"Posición": "BENCH", "Jugador": "Reid / DiVincenzo / Alexander-Walker", "Minutos_Esperados": 76.0, "O_EPM": 0.4, "D_EPM": 1.3}],
+    "OKC": [{"Posición": "PG", "Jugador": "Shai Gilgeous-Alexander", "Minutos_Esperados": 35.0, "O_EPM": 6.1, "D_EPM": 2.5}, {"Posición": "SG", "Jugador": "Luguentz Dort", "Minutos_Esperados": 30.0, "O_EPM": 0.1, "D_EPM": 2.2}, {"Posición": "SF", "Jugador": "Alex Caruso", "Minutos_Esperados": 28.0, "O_EPM": 0.3, "D_EPM": 3.4}, {"Posición": "PF", "Jugador": "Jalen Williams", "Minutos_Esperados": 34.0, "O_EPM": 3.1, "D_EPM": 1.6}, {"Posición": "C", "Jugador": "Chet Holmgren", "Minutos_Esperados": 32.0, "O_EPM": 2.2, "D_EPM": 3.5}, {"Posición": "BENCH", "Jugador": "Wallace / Joe / Wiggins", "Minutos_Esperados": 81.0, "O_EPM": 0.6, "D_EPM": 1.0}],
+    "POR": [{"Posición": "PG", "Jugador": "Scoot Henderson", "Minutos_Esperados": 30.0, "O_EPM": -1.4, "D_EPM": -1.2}, {"Posición": "SG", "Jugador": "Anfernee Simons", "Minutos_Esperados": 34.0, "O_EPM": 1.8, "D_EPM": -2.1}, {"Posición": "SF", "Jugador": "Deni Avdija", "Minutos_Esperados": 31.0, "O_EPM": 0.4, "D_EPM": 0.8}, {"Posición": "PF", "Jugador": "Jerami Grant", "Minutos_Esperados": 33.0, "O_EPM": 0.9, "D_EPM": -0.7}, {"Posición": "C", "Jugador": "Deandre Ayton", "Minutos_Esperados": 31.0, "O_EPM": 0.1, "D_EPM": 0.5}, {"Posición": "BENCH", "Jugador": "Sharpe / Clingan / Camara", "Minutos_Esperados": 81.0, "O_EPM": -2.1, "D_EPM": -0.4}],
+    "UTA": [{"Posición": "PG", "Jugador": "Keyonte George", "Minutos_Esperados": 31.0, "O_EPM": 0.5, "D_EPM": -1.9}, {"Posición": "SG", "Jugador": "Collin Sexton", "Minutos_Esperados": 30.0, "O_EPM": 2.1, "D_EPM": -1.5}, {"Posición": "SF", "Jugador": "Lauri Markkanen", "Minutos_Esperados": 34.0, "O_EPM": 3.5, "D_EPM": 0.2}, {"Posición": "PF", "Jugador": "Taylor Hendricks", "Minutos_Esperados": 27.0, "O_EPM": -1.1, "D_EPM": 0.4}, {"Posición": "C", "Jugador": "Walker Kessler", "Minutos_Esperados": 29.0, "O_EPM": -0.2, "D_EPM": 2.3}, {"Posición": "BENCH", "Jugador": "Clarkson / Collins / Filipowski", "Minutos_Esperados": 89.0, "O_EPM": -1.2, "D_EPM": -1.8}],
+    "GSW": [{"Posición": "PG", "Jugador": "Stephen Curry", "Minutos_Esperados": 34.0, "O_EPM": 5.6, "D_EPM": -0.3}, {"Posición": "SG", "Jugador": "Brandin Podziemski", "Minutos_Esperados": 29.0, "O_EPM": 0.6, "D_EPM": 0.8}, {"Posición": "SF", "Jugador": "Andrew Wiggins", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": 0.9}, {"Posición": "PF", "Jugador": "Jonathan Kuminga", "Minutos_Esperados": 30.0, "O_EPM": 1.1, "D_EPM": 0.1}, {"Posición": "C", "Jugador": "Draymond Green", "Minutos_Esperados": 30.0, "O_EPM": 0.4, "D_EPM": 3.3}, {"Posición": "BENCH", "Jugador": "Hield / Melton / Jackson-Davis", "Minutos_Esperados": 87.0, "O_EPM": 0.3, "D_EPM": 0.5}],
+    "LAC": [{"Posición": "PG", "Jugador": "James Harden", "Minutos_Esperados": 35.0, "O_EPM": 3.7, "D_EPM": 0.1}, {"Posición": "SG", "Jugador": "Norman Powell", "Minutos_Esperados": 33.0, "O_EPM": 2.2, "D_EPM": -0.4}, {"Posición": "SF", "Jugador": "Terance Mann", "Minutos_Esperados": 29.0, "O_EPM": -0.2, "D_EPM": 0.9}, {"Posición": "PF", "Jugador": "Derrick Jones Jr.", "Minutos_Esperados": 28.0, "O_EPM": -0.3, "D_EPM": 1.4}, {"Posición": "C", "Jugador": "Ivica Zubac", "Minutos_Esperados": 32.0, "O_EPM": 1.2, "D_EPM": 1.9}, {"Posición": "BENCH", "Jugador": "Dunn / Coffey / Batum", "Minutos_Esperados": 83.0, "O_EPM": -0.8, "D_EPM": 0.8}],
+    "LAL": [{"Posición": "PG", "Jugador": "D'Angelo Russell", "Minutos_Esperados": 31.0, "O_EPM": 1.8, "D_EPM": -1.1}, {"Posición": "SG", "Jugador": "Austin Reaves", "Minutos_Esperados": 34.0, "O_EPM": 1.9, "D_EPM": -0.5}, {"Posición": "SF", "Jugador": "Rui Hachimura", "Minutos_Esperados": 30.0, "O_EPM": 0.6, "D_EPM": -0.6}, {"Posición": "PF", "Jugador": "LeBron James", "Minutos_Esperados": 35.0, "O_EPM": 4.4, "D_EPM": 0.9}, {"Posición": "C", "Jugador": "Anthony Davis", "Minutos_Esperados": 36.0, "O_EPM": 3.1, "D_EPM": 3.7}, {"Posición": "BENCH", "Jugador": "Vincent / Knecht / Hayes", "Minutos_Esperados": 74.0, "O_EPM": -1.6, "D_EPM": -0.4}],
+    "PHX": [{"Posición": "PG", "Jugador": "Tyus Jones", "Minutos_Esperados": 30.0, "O_EPM": 1.7, "D_EPM": -0.8}, {"Posición": "SG", "Jugador": "Devin Booker", "Minutos_Esperados": 36.0, "O_EPM": 4.3, "D_EPM": -0.2}, {"Posición": "SF", "Jugador": "Bradley Beal", "Minutos_Esperados": 33.0, "O_EPM": 1.5, "D_EPM": -0.4}, {"Posición": "PF", "Jugador": "Kevin Durant", "Minutos_Esperados": 36.0, "O_EPM": 4.5, "D_EPM": 1.3}, {"Posición": "C", "Jugador": "Jusuf Nurkic", "Minutos_Esperados": 28.0, "O_EPM": 0.2, "D_EPM": 1.5}, {"Posición": "BENCH", "Jugador": "Allen / O'Neale / Plumlee", "Minutos_Esperados": 77.0, "O_EPM": -0.5, "D_EPM": 0.2}],
+    "SAC": [{"Posición": "PG", "Jugador": "De'Aaron Fox", "Minutos_Esperados": 36.0, "O_EPM": 3.8, "D_EPM": 0.8}, {"Posición": "SG", "Jugador": "Kevin Huerter", "Minutos_Esperados": 28.0, "O_EPM": 0.6, "D_EPM": -0.7}, {"Posición": "SF", "Jugador": "DeMar DeRozan", "Minutos_Esperados": 35.0, "O_EPM": 2.4, "D_EPM": -0.3}, {"Posición": "PF", "Jugador": "Keegan Murray", "Minutos_Esperados": 34.0, "O_EPM": 0.9, "D_EPM": 1.1}, {"Posición": "C", "Jugador": "Domantas Sabonis", "Minutos_Esperados": 36.0, "O_EPM": 3.3, "D_EPM": 0.9}, {"Posición": "BENCH", "Jugador": "Monk / Ellis / Lyles", "Minutos_Esperados": 71.0, "O_EPM": -0.6, "D_EPM": -0.2}],
+    "ATL": [{"Posición": "PG", "Jugador": "Trae Young", "Minutos_Esperados": 36.0, "O_EPM": 4.6, "D_EPM": -2.2}, {"Posición": "SG", "Jugador": "Dyson Daniels", "Minutos_Esperados": 30.0, "O_EPM": -0.5, "D_EPM": 2.4}, {"Posición": "SF", "Jugador": "Zaccharie Risacher", "Minutos_Esperados": 28.0, "O_EPM": -0.4, "D_EPM": 0.2}, {"Posición": "PF", "Jugador": "Jalen Johnson", "Minutos_Esperados": 35.0, "O_EPM": 2.1, "D_EPM": 0.9}, {"Posición": "C", "Jugador": "Clint Capela", "Minutos_Esperados": 27.0, "O_EPM": 0.3, "D_EPM": 1.3}, {"Posición": "BENCH", "Jugador": "Bogdanovic / Hunter / Okongwu", "Minutos_Esperados": 84.0, "O_EPM": 0.2, "D_EPM": -1.3}],
+    "CHA": [{"Posición": "PG", "Jugador": "LaMelo Ball", "Minutos_Esperados": 34.0, "O_EPM": 3.6, "D_EPM": -1.4}, {"Posición": "SG", "Jugador": "Josh Green", "Minutos_Esperados": 28.0, "O_EPM": -0.6, "D_EPM": 0.3}, {"Posición": "SF", "Jugador": "Brandon Miller", "Minutos_Esperados": 34.0, "O_EPM": 1.4, "D_EPM": -0.8}, {"Posición": "PF", "Jugador": "Miles Bridges", "Minutos_Esperados": 34.0, "O_EPM": 0.9, "D_EPM": -0.9}, {"Posición": "C", "Jugador": "Mark Williams", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": 1.1}, {"Posición": "BENCH", "Jugador": "Mann / Micic / Richards", "Minutos_Esperados": 81.0, "O_EPM": -2.2, "D_EPM": -1.2}],
+    "MIA": [{"Posición": "PG", "Jugador": "Terry Rozier", "Minutos_Esperados": 31.0, "O_EPM": 0.8, "D_EPM": -0.4}, {"Posición": "SG", "Jugador": "Tyler Herro", "Minutos_Esperados": 34.0, "O_EPM": 2.1, "D_EPM": -0.3}, {"Posición": "SF", "Jugador": "Jimmy Butler", "Minutos_Esperados": 34.0, "O_EPM": 3.6, "D_EPM": 1.9}, {"Posición": "PF", "Jugador": "Nikola Jovic", "Minutos_Esperados": 26.0, "O_EPM": 0.2, "D_EPM": 0.4}, {"Posición": "C", "Jugador": "Bam Adebayo", "Minutos_Esperados": 35.0, "O_EPM": 1.1, "D_EPM": 3.2}, {"Posición": "BENCH", "Jugador": "Jaquez Jr. / Robinson / Highsmith", "Minutos_Esperados": 80.0, "O_EPM": -1.1, "D_EPM": 0.9}],
+    "ORL": [{"Posición": "PG", "Jugador": "Jalen Suggs", "Minutos_Esperados": 31.0, "O_EPM": 0.9, "D_EPM": 3.1}, {"Posición": "SG", "Jugador": "Kentavious Caldwell-Pope", "Minutos_Esperados": 30.0, "O_EPM": 0.2, "D_EPM": 1.8}, {"Posición": "SF", "Jugador": "Franz Wagner", "Minutos_Esperados": 34.0, "O_EPM": 2.6, "D_EPM": 1.6}, {"Posición": "PF", "Jugador": "Paolo Banchero", "Minutos_Esperados": 35.0, "O_EPM": 2.8, "D_EPM": 0.8}, {"Posición": "C", "Jugador": "Wendell Carter Jr.", "Minutos_Esperados": 29.0, "O_EPM": 0.4, "D_EPM": 1.5}, {"Posición": "BENCH", "Jugador": "Isaac / Anthony / Bitadze", "Minutos_Esperados": 81.0, "O_EPM": -1.6, "D_EPM": 1.4}],
+    "WAS": [{"Posición": "PG", "Jugador": "Jordan Poole", "Minutos_Esperados": 32.0, "O_EPM": 0.4, "D_EPM": -2.3}, {"Posición": "SG", "Jugador": "Malcolm Brogdon", "Minutos_Esperados": 28.0, "O_EPM": 0.6, "D_EPM": -0.9}, {"Posición": "SF", "Jugador": "Bilal Coulibaly", "Minutos_Esperados": 30.0, "O_EPM": -1.2, "D_EPM": 0.7}, {"Posición": "PF", "Jugador": "Kyle Kuzma", "Minutos_Esperados": 33.0, "O_EPM": 0.5, "D_EPM": -1.4}, {"Posición": "C", "Jugador": "Alex Sarr", "Minutos_Esperados": 28.0, "O_EPM": -1.6, "D_EPM": 0.6}, {"Posición": "BENCH", "Jugador": "Valanciunas / Kispert / Carrington", "Minutos_Esperados": 89.0, "O_EPM": -1.8, "D_EPM": -1.5}],
+    "DAL": [{"Posición": "PG", "Jugador": "Luka Doncic", "Minutos_Esperados": 37.0, "O_EPM": 6.4, "D_EPM": 0.4}, {"Posición": "SG", "Jugador": "Kyrie Irving", "Minutos_Esperados": 35.0, "O_EPM": 4.1, "D_EPM": 0.2}, {"Posición": "SF", "Jugador": "Klay Thompson", "Minutos_Esperados": 30.0, "O_EPM": 1.1, "D_EPM": -0.5}, {"Posición": "PF", "Jugador": "P.J. Washington", "Minutos_Esperados": 32.0, "O_EPM": 0.2, "D_EPM": 1.2}, {"Posición": "C", "Jugador": "Daniel Gafford", "Minutos_Esperados": 26.0, "O_EPM": 1.0, "D_EPM": 1.6}, {"Posición": "BENCH", "Jugador": "Lively II / Grimes / Marshall", "Minutos_Esperados": 80.0, "O_EPM": -0.6, "D_EPM": 0.7}],
+    "HOU": [{"Posición": "PG", "Jugador": "Fred VanVleet", "Minutos_Esperados": 35.0, "O_EPM": 2.3, "D_EPM": 1.6}, {"Posición": "SG", "Jugador": "Jalen Green", "Minutos_Esperados": 33.0, "O_EPM": 1.5, "D_EPM": -0.2}, {"Posición": "SF", "Jugador": "Dillon Brooks", "Minutos_Esperados": 31.0, "O_EPM": -0.6, "D_EPM": 1.4}, {"Posición": "PF", "Jugador": "Jabari Smith Jr.", "Minutos_Esperados": 32.0, "O_EPM": 0.3, "D_EPM": 1.3}, {"Posición": "C", "Jugador": "Alperen Sengun", "Minutos_Esperados": 33.0, "O_EPM": 3.1, "D_EPM": 1.1}, {"Posición": "BENCH", "Jugador": "Thompson / Eason / Sheppard", "Minutos_Esperados": 76.0, "O_EPM": -0.8, "D_EPM": 1.5}],
+    "MEM": [{"Posición": "PG", "Jugador": "Ja Morant", "Minutos_Esperados": 34.0, "O_EPM": 3.9, "D_EPM": -0.3}, {"Posición": "SG", "Jugador": "Desmond Bane", "Minutos_Esperados": 34.0, "O_EPM": 2.8, "D_EPM": 0.6}, {"Posición": "SF", "Jugador": "Marcus Smart", "Minutos_Esperados": 29.0, "O_EPM": -0.4, "D_EPM": 1.9}, {"Posición": "PF", "Jugador": "Jaren Jackson Jr.", "Minutos_Esperados": 32.0, "O_EPM": 1.5, "D_EPM": 2.8}, {"Posición": "C", "Jugador": "Zach Edey", "Minutos_Esperados": 26.0, "O_EPM": 0.4, "D_EPM": 1.1}, {"Posición": "BENCH", "Jugador": "Aldama / Pippen Jr. / Clarke", "Minutos_Esperados": 85.0, "O_EPM": -0.6, "D_EPM": 0.3}],
+    "NOP": [{"Posición": "PG", "Jugador": "Dejounte Murray", "Minutos_Esperados": 34.0, "O_EPM": 1.7, "D_EPM": 0.9}, {"Posición": "SG", "Jugador": "CJ McCollum", "Minutos_Esperados": 32.0, "O_EPM": 1.9, "D_EPM": -0.6}, {"Posición": "SF", "Jugador": "Brandon Ingram", "Minutos_Esperados": 34.0, "O_EPM": 2.2, "D_EPM": -0.2}, {"Posición": "PF", "Jugador": "Herbert Jones", "Minutos_Esperados": 31.0, "O_EPM": 0.2, "D_EPM": 2.9}, {"Posición": "C", "Jugador": "Zion Williamson", "Minutos_Esperados": 33.0, "O_EPM": 3.4, "D_EPM": 0.4}, {"Posición": "BENCH", "Jugador": "Murphy III / Alvarado / Missi", "Minutos_Esperados": 76.0, "O_EPM": -0.9, "D_EPM": 0.2}],
+    "SAS": [{"Posición": "PG", "Jugador": "Chris Paul", "Minutos_Esperados": 28.0, "O_EPM": 1.6, "D_EPM": 0.4}, {"Posición": "SG", "Jugador": "Devin Vassell", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": 0.1}, {"Posición": "SF", "Jugador": "Harrison Barnes", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": -0.4}, {"Posición": "PF", "Jugador": "Jeremy Sochan", "Minutos_Esperados": 30.0, "O_EPM": -0.8, "D_EPM": 0.7}, {"Posición": "C", "Jugador": "Victor Wembanyama", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 4.5}, {"Posición": "BENCH", "Jugador": "Johnson / Castle / Tre Jones", "Minutos_Esperados": 86.0, "O_EPM": -1.4, "D_EPM": -0.1}],
 }
 
 
@@ -341,16 +128,244 @@ def build_default_lineups_dict() -> Dict[str, pd.DataFrame]:
     return {abbr: pd.DataFrame(rows)[LINEUP_COLS].copy() for abbr, rows in DEFAULT_LINEUPS_30_TEAMS.items()}
 
 
+# ==============================================================================
+# GESTIÓN DE PLANTILLAS EXCEL (.XLSX): GENERACIÓN Y PARSEO A LINEUPS
+# ==============================================================================
+def _interpretar_booleano_estrella(val) -> bool:
+    """Normaliza valores booleanos o de texto ('True', 'SI', 'SÍ', '1', 'YES') para Es_Estrella."""
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    if pd.isna(val):
+        return False
+    s = str(val).strip().upper()
+    return s in {"TRUE", "1", "1.0", "SI", "SÍ", "YES", "Y", "STAR", "ESTRELLA"}
+
+
+def generar_dataframe_plantilla_excel(
+    lineups_dict: Optional[Dict[str, pd.DataFrame]] = None,
+    df_teams: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """
+    Consolida en un solo DataFrame plano la información de los 30 equipos para exportar a Excel (.xlsx).
+    Columnas exactas:
+        ['Team_Abbr', 'Pos', 'Jugador', 'Minutos', 'O_EPM', 'D_EPM', 'Pace_Diff', 'Es_Estrella', 'PPG_Linea']
+    Incluye los 5 titulares y la fila de 'Banca' por cada franquicia (minutos sumando 240 por equipo).
+    """
+    if df_teams is None:
+        df_teams = pd.DataFrame(DEFAULT_CSV_DATA)
+    if lineups_dict is None:
+        lineups_dict = build_default_lineups_dict()
+
+    team_meta_map: Dict[str, Dict] = {}
+    for _, row in df_teams.iterrows():
+        t_abbr = str(row["Team_Abbr"]).strip().upper()
+        team_meta_map[t_abbr] = {
+            "Star1_Name": str(row.get("Star1_Name", "")).strip(),
+            "Star1_Line": float(row.get("Star1_Line", 20.5)),
+            "Star2_Name": str(row.get("Star2_Name", "")).strip(),
+            "Star2_Line": float(row.get("Star2_Line", 18.5)),
+        }
+
+    records: List[Dict] = []
+    ordered_abbrs = list(DEFAULT_LINEUPS_30_TEAMS.keys())
+
+    for abbr in ordered_abbrs:
+        lu_df = lineups_dict.get(abbr)
+        if lu_df is None or lu_df.empty:
+            lu_df = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[abbr])
+
+        meta = team_meta_map.get(abbr, {})
+        s1_name = meta.get("Star1_Name", "").lower()
+        s2_name = meta.get("Star2_Name", "").lower()
+        s1_line = meta.get("Star1_Line", 22.5)
+        s2_line = meta.get("Star2_Line", 19.5)
+
+        for _, r in lu_df.iterrows():
+            raw_pos = str(r.get("Posición", r.get("Pos", "PG"))).strip()
+            pos_label = "Banca" if raw_pos.upper() in {"BENCH", "BANCA"} else raw_pos.upper()
+            player_name = str(r.get("Jugador", "")).strip()
+            mins_val = round(float(r.get("Minutos_Esperados", r.get("Minutos", 0.0))), 1)
+            o_epm_val = round(float(r.get("O_EPM", 0.0)), 1)
+            d_epm_val = round(float(r.get("D_EPM", 0.0)), 1)
+            pace_diff_val = round(float(r.get("Pace_Diff", 0.0)), 2)
+
+            if "Es_Estrella" in r and pd.notna(r["Es_Estrella"]):
+                es_estrella = _interpretar_booleano_estrella(r["Es_Estrella"])
+            else:
+                p_low = player_name.lower()
+                es_estrella = bool(pos_label != "Banca" and p_low in {s1_name, s2_name})
+
+            if "PPG_Linea" in r and pd.notna(r["PPG_Linea"]) and float(r["PPG_Linea"]) > 0:
+                ppg_linea = round(float(r["PPG_Linea"]), 1)
+            elif player_name.lower() == s1_name:
+                ppg_linea = round(float(s1_line), 1)
+            elif player_name.lower() == s2_name:
+                ppg_linea = round(float(s2_line), 1)
+            elif pos_label == "Banca":
+                ppg_linea = 0.0
+            else:
+                est_ppg = max(8.5, (mins_val * 0.50) + (o_epm_val * 1.45))
+                ppg_linea = round_to_half_point(est_ppg)
+
+            records.append(
+                {
+                    "Team_Abbr": abbr,
+                    "Pos": pos_label,
+                    "Jugador": player_name,
+                    "Minutos": float(mins_val),
+                    "O_EPM": float(o_epm_val),
+                    "D_EPM": float(d_epm_val),
+                    "Pace_Diff": float(pace_diff_val),
+                    "Es_Estrella": bool(es_estrella),
+                    "PPG_Linea": float(ppg_linea),
+                }
+            )
+
+    df_out = pd.DataFrame(records)[EXCEL_TEMPLATE_COLS]
+    for fcol in ["Minutos", "O_EPM", "D_EPM", "Pace_Diff", "PPG_Linea"]:
+        df_out[fcol] = df_out[fcol].astype(float)
+    return df_out
+
+
+def parsear_excel_a_lineups(df_excel: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """
+    Valida que el DataFrame cargado desde Excel (.xlsx) contenga las columnas requeridas
+    ['Team_Abbr', 'Pos', 'Jugador', 'Minutos', 'O_EPM', 'D_EPM', 'Pace_Diff', 'Es_Estrella', 'PPG_Linea']
+    y que los minutos por equipo sumen 240.
+    Convierte el DataFrame plano de vuelta al diccionario {team_abbr: DataFrame} que consume
+    el motor de simulación `run_monte_carlo_matchup`.
+    """
+    if df_excel is None or not isinstance(df_excel, pd.DataFrame) or df_excel.empty:
+        raise ValueError("El archivo Excel subido está vacío o no contiene una tabla válida.")
+
+    df_clean = df_excel.copy()
+    df_clean.columns = [str(c).strip() for c in df_clean.columns]
+
+    missing_cols = [c for c in EXCEL_TEMPLATE_COLS if c not in df_clean.columns]
+    if missing_cols:
+        raise ValueError(
+            f"El archivo Excel no contiene las columnas requeridas: {', '.join(missing_cols)}. "
+            f"Columnas esperadas: {', '.join(EXCEL_TEMPLATE_COLS)}"
+        )
+
+    df_clean = df_clean.dropna(subset=["Team_Abbr", "Jugador"], how="all").copy()
+    df_clean["Team_Abbr"] = df_clean["Team_Abbr"].astype(str).str.strip().str.upper()
+    df_clean["Minutos"] = pd.to_numeric(df_clean["Minutos"], errors="coerce").fillna(0.0).astype(float)
+    df_clean["O_EPM"] = pd.to_numeric(df_clean["O_EPM"], errors="coerce").fillna(0.0).astype(float)
+    df_clean["D_EPM"] = pd.to_numeric(df_clean["D_EPM"], errors="coerce").fillna(0.0).astype(float)
+    df_clean["Pace_Diff"] = pd.to_numeric(df_clean["Pace_Diff"], errors="coerce").fillna(0.0).astype(float)
+    df_clean["PPG_Linea"] = pd.to_numeric(df_clean["PPG_Linea"], errors="coerce").fillna(0.0).astype(float)
+    df_clean["Es_Estrella"] = df_clean["Es_Estrella"].apply(_interpretar_booleano_estrella)
+
+    lineups_parsed: Dict[str, pd.DataFrame] = build_default_lineups_dict()
+
+    for team_abbr, group in df_clean.groupby("Team_Abbr", sort=False):
+        total_team_mins = float(group["Minutos"].sum())
+        if abs(total_team_mins - 240.0) > 0.5:
+            raise ValueError(
+                f"Los minutos del equipo '{team_abbr}' suman {total_team_mins:.1f} "
+                f"(deben sumar exactamente 240.0 minutos por franquicia)."
+            )
+
+        team_rows: List[Dict] = []
+        for _, row in group.iterrows():
+            raw_pos = str(row["Pos"]).strip().upper()
+            internal_pos = "BENCH" if raw_pos in {"BANCA", "BENCH", "BN", "ROTACION", "ROTACIÓN"} else raw_pos
+            team_rows.append(
+                {
+                    "Posición": internal_pos,
+                    "Jugador": str(row["Jugador"]).strip(),
+                    "Minutos_Esperados": round(float(row["Minutos"]), 1),
+                    "O_EPM": round(float(row["O_EPM"]), 1),
+                    "D_EPM": round(float(row["D_EPM"]), 1),
+                    "Pace_Diff": round(float(row["Pace_Diff"]), 2),
+                    "Es_Estrella": bool(row["Es_Estrella"]),
+                    "PPG_Linea": round(float(row["PPG_Linea"]), 1),
+                }
+            )
+
+        lineups_parsed[team_abbr] = pd.DataFrame(team_rows)
+
+    return lineups_parsed
+
+
+def construir_excel_plantilla_bytes(
+    lineups_dict: Optional[Dict[str, pd.DataFrame]] = None,
+    df_teams: Optional[pd.DataFrame] = None,
+) -> bytes:
+    """
+    Convierte el DataFrame de `generar_dataframe_plantilla_excel()` a formato Excel binario (.xlsx)
+    en memoria usando `io.BytesIO()` y `openpyxl`, aplicando formato institucional de tabla.
+    """
+    df_plantilla = generar_dataframe_plantilla_excel(lineups_dict=lineups_dict, df_teams=df_teams)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df_plantilla.to_excel(writer, index=False, sheet_name="Rosters_NBA_30")
+        ws = writer.sheets["Rosters_NBA_30"]
+        ws.views.sheetView[0].showGridLines = True
+        ws.freeze_panes = "A2"
+
+        header_fill = PatternFill(start_color="0B1223", end_color="0B1223", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="00F5D4")
+        alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
+        thin_border = Border(
+            left=Side(style="thin", color="D9D9D9"),
+            right=Side(style="thin", color="D9D9D9"),
+            top=Side(style="thin", color="D9D9D9"),
+            bottom=Side(style="thin", color="D9D9D9"),
+        )
+
+        for col_idx in range(1, len(EXCEL_TEMPLATE_COLS) + 1):
+            c = ws.cell(row=1, column=col_idx)
+            c.fill = header_fill
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center" if col_idx != 3 else "left", vertical="center")
+        ws.row_dimensions[1].height = 24
+
+        for row_idx in range(2, len(df_plantilla) + 2):
+            team_block = (row_idx - 2) // 6
+            for col_idx in range(1, len(EXCEL_TEMPLATE_COLS) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.border = thin_border
+                if team_block % 2 == 1:
+                    cell.fill = alt_fill
+                if col_idx in (1, 2, 8):
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_idx == 3:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                else:
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = "0.0"
+
+        col_widths = {"A": 13, "B": 11, "C": 32, "D": 12, "E": 11, "F": 11, "G": 12, "H": 14, "I": 13}
+        for col_letter, width in col_widths.items():
+            ws.column_dimensions[col_letter].width = width
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+# ==============================================================================
+# MOTOR DE CÁLCULO ASCENDENTE (BOTTOM-UP LINEUP AGGREGATOR)
+# ==============================================================================
 def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[float, float, float]:
     """
     Proyecta el Off_Rtg, Def_Rtg y Pace sumando los minutos ponderados y el impacto
     neto individual (O_EPM y D_EPM) de los 5 titulares más la unidad de banca (240 minutos totales).
     """
     df_clean = df_lineup.copy()
-    mins = pd.to_numeric(df_clean["Minutos_Esperados"], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
+    mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_clean.columns else "Minutos"
+    pos_col = "Posición" if "Posición" in df_clean.columns else "Pos"
+
+    mins = pd.to_numeric(df_clean[mins_col], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
     o_epm = pd.to_numeric(df_clean["O_EPM"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
     d_epm = pd.to_numeric(df_clean["D_EPM"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    pos_arr = df_clean["Posición"].astype(str).str.upper().to_numpy()
+    pos_arr = df_clean[pos_col].astype(str).str.upper().to_numpy()
+    pace_diff_arr = (
+        pd.to_numeric(df_clean["Pace_Diff"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        if "Pace_Diff" in df_clean.columns
+        else np.zeros(len(df_clean), dtype=float)
+    )
 
     total_mins = float(np.sum(mins))
     missing_mins = 0.0
@@ -383,7 +398,8 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
 
     pace_guard_boost = ((guard_mins - 65.0) / 12.0) * 0.45
     pace_style_boost = (guard_o_epm * 0.16) - (big_d_epm * 0.10)
-    proj_pace = float(np.clip(float(pace_base) + pace_guard_boost + pace_style_boost, 88.0, 108.0))
+    custom_pace_diff = float(np.sum((eff_mins / 48.0) * pace_diff_arr))
+    proj_pace = float(np.clip(float(pace_base) + pace_guard_boost + pace_style_boost + custom_pace_diff, 88.0, 108.0))
 
     return round(proj_off_rtg, 1), round(proj_def_rtg, 1), round(proj_pace, 1)
 
@@ -391,7 +407,8 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
 def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
     """
     Actualiza dinámicamente Off_Rtg, Def_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
-    de la fila del equipo a partir de su quinteto activo antes de correr Monte Carlo.
+    de la fila del equipo a partir de su quinteto activo (incluyendo metadatos Excel de
+    `Es_Estrella` y `PPG_Linea` si están presentes) antes de correr Monte Carlo.
     """
     updated = team_row.copy()
     pace_base = float(team_row["Pace"])
@@ -405,10 +422,36 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     updated["Def_Rtg"] = def_rtg
     updated["Pace"] = dyn_pace
 
-    starters_df = df_lineup[df_lineup["Posición"].astype(str).str.upper() != "BENCH"].copy()
+    pos_col = "Posición" if "Posición" in df_lineup.columns else "Pos"
+    mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_lineup.columns else "Minutos"
+
+    starters_df = df_lineup[~df_lineup[pos_col].astype(str).str.upper().isin(["BENCH", "BANCA"])].copy()
     if not starters_df.empty:
-        starters_df["Minutos_Esperados"] = pd.to_numeric(starters_df["Minutos_Esperados"], errors="coerce").fillna(0.0)
+        starters_df["Minutos_Esperados"] = pd.to_numeric(starters_df[mins_col], errors="coerce").fillna(0.0)
         starters_df["O_EPM"] = pd.to_numeric(starters_df["O_EPM"], errors="coerce").fillna(0.0)
+
+        if "Es_Estrella" in starters_df.columns:
+            star_flags = starters_df["Es_Estrella"].apply(_interpretar_booleano_estrella)
+            flagged_stars = starters_df[star_flags & (starters_df["Minutos_Esperados"] > 0.5)].copy()
+            if len(flagged_stars) >= 1:
+                for idx_s in range(min(2, len(flagged_stars))):
+                    st_row = flagged_stars.iloc[idx_s]
+                    st_num = idx_s + 1
+                    st_name = str(st_row["Jugador"]).strip()
+                    st_mins = float(st_row["Minutos_Esperados"])
+                    st_oepm = float(st_row["O_EPM"])
+                    st_line = float(st_row.get("PPG_Linea", 0.0)) if "PPG_Linea" in st_row else 0.0
+                    if st_line > 0.0:
+                        updated[f"Star{st_num}_Name"] = st_name
+                        updated[f"Star{st_num}_Line"] = round_to_half_point(st_line)
+                        updated[f"Star{st_num}_PPG"] = round(st_line + 0.6, 1)
+                    else:
+                        est_ppg = round(max(8.5, (st_mins * 0.55) + (st_oepm * 1.75)), 1)
+                        updated[f"Star{st_num}_Name"] = st_name
+                        updated[f"Star{st_num}_PPG"] = est_ppg
+                        updated[f"Star{st_num}_Line"] = round_to_half_point(est_ppg)
+                if len(flagged_stars) >= 2:
+                    return updated
 
         for star_idx, default_mins in [(1, 35.0), (2, 33.0)]:
             s_name = str(updated[f"Star{star_idx}_Name"])
@@ -418,6 +461,7 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
             if not match.empty:
                 cur_mins = float(match.iloc[0]["Minutos_Esperados"])
                 cur_o_epm = float(match.iloc[0]["O_EPM"])
+                custom_line = float(match.iloc[0].get("PPG_Linea", 0.0)) if "PPG_Linea" in match.columns else 0.0
                 if cur_mins <= 0.5:
                     active_starters = starters_df[starters_df["Minutos_Esperados"] > 5.0].copy()
                     other_star_name = str(updated[f"Star{3 - star_idx}_Name"])
@@ -439,6 +483,8 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
                 else:
                     mins_ratio = cur_mins / default_mins
                     updated[f"Star{star_idx}_PPG"] = round(max(4.0, base_ppg * mins_ratio + (cur_o_epm * 0.25)), 1)
+                    if custom_line > 0.0:
+                        updated[f"Star{star_idx}_Line"] = round_to_half_point(custom_line)
             else:
                 active_starters = starters_df.sort_values(by=["O_EPM", "Minutos_Esperados"], ascending=False)
                 if len(active_starters) >= star_idx:

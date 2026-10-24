@@ -1,3 +1,4 @@
+import io
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
@@ -24,6 +25,8 @@ from engine_nba import (
     build_default_lineups_dict,
     calcular_ratings_lineup,
     extract_executive_radar,
+    generar_dataframe_plantilla_excel,
+    parsear_excel_a_lineups,
     round_to_half_point,
     run_monte_carlo_matchup,
 )
@@ -160,8 +163,9 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
     Despliega la tabla editable ['Posición', 'Jugador', 'Minutos_Esperados', 'O_EPM', 'D_EPM']
     y recalcula en tiempo real el Off_Rtg, Def_Rtg y Pace mediante `calcular_ratings_lineup`.
     """
-    current_lineup = st.session_state.lineups_nba[team_abbr][LINEUP_COLS].copy()
-    proj_off, proj_def, proj_pace = calcular_ratings_lineup(current_lineup, pace_base)
+    full_team_df = st.session_state.lineups_nba[team_abbr].copy()
+    current_lineup = full_team_df[LINEUP_COLS].copy()
+    proj_off, proj_def, proj_pace = calcular_ratings_lineup(full_team_df, pace_base)
     total_mins = float(pd.to_numeric(current_lineup["Minutos_Esperados"], errors="coerce").fillna(0.0).sum())
 
     st.markdown(
@@ -195,14 +199,17 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
         column_config={
             "Posición": st.column_config.TextColumn("Posición", width="small"),
             "Jugador": st.column_config.TextColumn("Jugador (Titular / Rotación)", width="medium"),
-            "Minutos_Esperados": st.column_config.NumberColumn("Minutos_Esperados", min_value=0.0, max_value=48.0, step=1.0, format="%.1f"),
+            "Minutos_Esperados": st.column_config.NumberColumn("Minutos_Esperados", min_value=0.0, max_value=96.0, step=1.0, format="%.1f"),
             "O_EPM": st.column_config.NumberColumn("O_EPM", min_value=-8.0, max_value=10.0, step=0.1, format="%+.1f"),
             "D_EPM": st.column_config.NumberColumn("D_EPM", min_value=-8.0, max_value=10.0, step=0.1, format="%+.1f"),
         },
     )
 
     if not edited_lineup.equals(current_lineup):
-        st.session_state.lineups_nba[team_abbr] = edited_lineup[LINEUP_COLS].copy()
+        updated_full = full_team_df.copy()
+        for col in LINEUP_COLS:
+            updated_full[col] = edited_lineup[col].values
+        st.session_state.lineups_nba[team_abbr] = updated_full
         st.rerun()
 
 
@@ -415,10 +422,13 @@ def init_session_state() -> None:
         st.session_state.active_matchups = list(FULL_30_TEAM_SLATE[:6])
     if "active_custom_lines" not in st.session_state:
         st.session_state.active_custom_lines = {}
+    if "ultimo_excel_procesado" not in st.session_state:
+        st.session_state.ultimo_excel_procesado = None
 
 
 def reset_all_lineups() -> None:
     st.session_state.lineups_nba = build_default_lineups_dict()
+    st.session_state.ultimo_excel_procesado = None
     st.session_state.lineup_editor_version += 1
 
 
@@ -574,9 +584,44 @@ def main() -> None:
     with st.sidebar:
         st.markdown(
             '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
-            '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v9.0</div>',
+            '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v10.0</div>',
             unsafe_allow_html=True,
         )
+
+        # ======================================================================
+        # MÓDULO DE DESCARGA Y CARGA DE ROSTERS Y QUINTETOS EN EXCEL (.XLSX)
+        # ======================================================================
+        with st.sidebar.expander("📁 Importar / Exportar Rosters en Excel", expanded=False):
+            df_plantilla_excel = generar_dataframe_plantilla_excel(
+                lineups_dict=st.session_state.lineups_nba,
+                df_teams=st.session_state.df_nba,
+            )
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                df_plantilla_excel.to_excel(writer, index=False, sheet_name="Rosters_NBA_30")
+            excel_bytes = excel_buffer.getvalue()
+
+            st.download_button(
+                label="📥 Descargar Plantilla Roster (Excel)",
+                data=excel_bytes,
+                file_name="nba_rosters_plantilla.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+            archivo_subido = st.file_uploader("Sube tu Excel editado (.xlsx)", type=["xlsx"])
+            if archivo_subido is not None:
+                try:
+                    df_subido = pd.read_excel(archivo_subido)
+                    st.session_state.lineups_nba = parsear_excel_a_lineups(df_subido)
+                    st.session_state.data_source_label = f"Excel Personalizado ({archivo_subido.name})"
+                    firma_excel = f"{archivo_subido.name}_{archivo_subido.size}"
+                    if st.session_state.get("ultimo_excel_procesado") != firma_excel:
+                        st.session_state.ultimo_excel_procesado = firma_excel
+                        st.session_state.lineup_editor_version += 1
+                    st.success("✅ Rosters y quintetos actualizados desde Excel exitosamente.")
+                except Exception as exc:
+                    st.error(f"Error al procesar el archivo Excel: {exc}")
 
         st.markdown("### 🗓️ CARTELERA EN VIVO (ESPN API)")
         if st.button("🔄 Actualizar Calendario de Hoy", use_container_width=True):
@@ -662,7 +707,7 @@ def main() -> None:
                 </div>
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
-            <div class="tv-subtitle">Arquitectura modular limpia (<code>styles.py</code>, <code>sync_espn.py</code>, <code>engine_nba.py</code>, <code>app.py</code>) con calendario diario en vivo desde ESPN y motor Monte Carlo de 5,000 posesiones.</div>
+            <div class="tv-subtitle">Arquitectura modular limpia (<code>styles.py</code>, <code>sync_espn.py</code>, <code>engine_nba.py</code>, <code>app.py</code>) con gestión de quintetos en Excel (.xlsx), calendario diario ESPN y motor Monte Carlo de 5,000 posesiones.</div>
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">CARTELERA HOY: <strong>{active_games_count} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{active_games_count * n_sims:,}</strong></div>
