@@ -1,3 +1,4 @@
+import hashlib
 import io
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
@@ -17,18 +18,20 @@ from sync_espn import (
     sincronizar_datos_nba_api,
 )
 from engine_nba import (
-    DEFAULT_LINEUPS_30_TEAMS,
     FULL_30_TEAM_SLATE,
     GAME_SLATE_TIMES,
     LINEUP_COLS,
     ROSTER_EDITOR_COLS,
     build_default_lineups_dict,
     calcular_ratings_lineup,
+    construir_excel_plantilla_bytes,
     extract_executive_radar,
     generar_dataframe_plantilla_excel,
+    obtener_lineup_en_sesion,
     parsear_excel_a_lineups,
     round_to_half_point,
     run_monte_carlo_matchup,
+    sincronizar_df_nba_con_lineups,
 )
 
 st.set_page_config(
@@ -42,7 +45,7 @@ st.set_page_config(
 def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
     st.markdown(
         f'<div class="section-banner"><div class="section-banner-title">📡 RADAR EJECUTIVO DE LA JORNADA // TOP SYNDICATE PICKS</div>'
-        f'<div class="section-banner-tag">QUINTETOS EPM ACTIVOS &bull; {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMS</div></div>',
+        f'<div class="section-banner-tag">QUINTETOS EN SESIÓN ACTIVOS &bull; {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMS</div></div>',
         unsafe_allow_html=True,
     )
     c1, c2, c3, c4 = st.columns(4)
@@ -86,8 +89,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
 def render_slate_grid_3x3(sim_results: List[Dict], slate_meta: Optional[List[Dict]] = None) -> None:
     """
     VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
-    Renderiza los partidos del día automáticamente en 3 columnas con logos ESPN CDN
-    y el botón interactivo "LEER ANÁLISIS →".
+    Renderiza los partidos del día consumiendo estrictamente las métricas de `st.session_state.lineups_nba`.
     """
     st.markdown(
         f'<div class="section-banner"><div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) EN ESCANEO</div>'
@@ -160,10 +162,9 @@ def render_slate_grid_3x3(sim_results: List[Dict], slate_meta: Optional[List[Dic
 def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: float, key_prefix: str) -> None:
     """
     GESTOR INTERACTIVO DE QUINTETOS (st.data_editor)
-    Despliega la tabla editable ['Posición', 'Jugador', 'Minutos_Esperados', 'O_EPM', 'D_EPM']
-    y recalcula en tiempo real el Off_Rtg, Def_Rtg y Pace mediante `calcular_ratings_lineup`.
+    Lee y actualiza obligatoriamente `st.session_state.lineups_nba[team_abbr]` y sincroniza `st.session_state.df_nba`.
     """
-    full_team_df = st.session_state.lineups_nba[team_abbr].copy()
+    full_team_df = obtener_lineup_en_sesion(team_abbr)
     current_lineup = full_team_df[LINEUP_COLS].copy()
     proj_off, proj_def, proj_pace = calcular_ratings_lineup(full_team_df, pace_base)
     total_mins = float(pd.to_numeric(current_lineup["Minutos_Esperados"], errors="coerce").fillna(0.0).sum())
@@ -175,7 +176,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
                 {escudo_nba_html(team_abbr, 32)}
                 <div>
                     <div style="font-family:'Orbitron',sans-serif; font-size:0.92rem; font-weight:800; color:#F8FAFC;">QUINTETO {team_name.upper()} ({team_abbr})</div>
-                    <div style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; color:#94A3B8;">Minutos Asignados: <strong>{total_mins:.0f} / 240 min</strong> (Ajuste automático de banca)</div>
+                    <div style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; color:#94A3B8;">Minutos Asignados: <strong>{total_mins:.0f} / 240 min</strong> (Fuente: <code>st.session_state.lineups_nba</code>)</div>
                 </div>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -199,7 +200,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
         column_config={
             "Posición": st.column_config.TextColumn("Posición", width="small"),
             "Jugador": st.column_config.TextColumn("Jugador (Titular / Rotación)", width="medium"),
-            "Minutos_Esperados": st.column_config.NumberColumn("Minutos_Esperados", min_value=0.0, max_value=96.0, step=1.0, format="%.1f"),
+            "Minutos_Esperados": st.column_config.NumberColumn("Minutos_Esperados", min_value=0.0, max_value=120.0, step=1.0, format="%.1f"),
             "O_EPM": st.column_config.NumberColumn("O_EPM", min_value=-8.0, max_value=10.0, step=0.1, format="%+.1f"),
             "D_EPM": st.column_config.NumberColumn("D_EPM", min_value=-8.0, max_value=10.0, step=0.1, format="%+.1f"),
         },
@@ -210,14 +211,14 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
         for col in LINEUP_COLS:
             updated_full[col] = edited_lineup[col].values
         st.session_state.lineups_nba[team_abbr] = updated_full
+        st.session_state.df_nba = sincronizar_df_nba_con_lineups(st.session_state.df_nba, st.session_state.lineups_nba)
         st.rerun()
 
 
 def render_detailed_matchup_dossier(res: Dict) -> None:
     """
     VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO
-    Incluye el Gestor Interactivo de Quintetos (Visitante y Local) lado a lado,
-    el Scoreboard TV Header con logos oficiales de 64px y las 4 filas de Monte Carlo.
+    Consume obligatoriamente `st.session_state.lineups_nba` tanto en las tablas de quintetos como en las 4 filas Monte Carlo.
     """
     away_abbr, home_abbr = res["away_abbr"], res["home_abbr"]
     away_row, home_row = res["away_row"], res["home_row"]
@@ -232,7 +233,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
 
     st.markdown(
         '<div class="section-banner"><div class="section-banner-title">♟️ GESTOR INTERACTIVO DE QUINTETOS TITULARES (BOTTOM-UP EPM AGGREGATOR)</div>'
-        '<div class="section-banner-tag">EDITA JUGADORES, MINUTOS (0 = BAJA/DESCANSO) U O_EPM / D_EPM EN VIVO</div></div>',
+        '<div class="section-banner-tag">SINCRONIZADO EN TIEMPO REAL CON st.session_state.lineups_nba</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -404,6 +405,9 @@ def init_session_state() -> None:
         st.session_state.lineups_nba = build_default_lineups_dict()
     if "df_nba" not in st.session_state:
         sincronizar_datos_nba_api(season=NBA_SEASON_TARGET)
+        st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+            st.session_state.df_nba, st.session_state.lineups_nba
+        )
     if "calendario_nba" not in st.session_state:
         st.session_state.calendario_nba = obtener_calendario_nba_hoy()
     if "modo_manual_respaldo" not in st.session_state:
@@ -422,14 +426,24 @@ def init_session_state() -> None:
         st.session_state.active_matchups = list(FULL_30_TEAM_SLATE[:6])
     if "active_custom_lines" not in st.session_state:
         st.session_state.active_custom_lines = {}
-    if "ultimo_excel_procesado" not in st.session_state:
-        st.session_state.ultimo_excel_procesado = None
+    if "excel_procesado_sig" not in st.session_state:
+        st.session_state.excel_procesado_sig = None
+    if "excel_cargado_ok" not in st.session_state:
+        st.session_state.excel_cargado_ok = False
+    if "df_excel_preview" not in st.session_state:
+        st.session_state.df_excel_preview = None
 
 
 def reset_all_lineups() -> None:
     st.session_state.lineups_nba = build_default_lineups_dict()
-    st.session_state.ultimo_excel_procesado = None
+    st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+        st.session_state.df_nba, st.session_state.lineups_nba
+    )
+    st.session_state.excel_procesado_sig = None
+    st.session_state.excel_cargado_ok = False
+    st.session_state.df_excel_preview = None
     st.session_state.lineup_editor_version += 1
+    st.session_state.roster_editor_version += 1
 
 
 def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
@@ -455,20 +469,23 @@ def sync_edited_roster_to_session(edited_subset: pd.DataFrame) -> None:
 
 
 def render_live_roster_manager() -> None:
-    """Renderiza el Gestor de Roster & Traspasos (st.data_editor) para las 30 franquicias."""
+    """Renderiza el Gestor de Roster & Traspasos (st.data_editor) sincronizado con los quintetos en sesión."""
     with st.expander("⚙️ Gestor de Roster & Traspasos (Live Trades / Injuries - 30 Equipos)", expanded=False):
         top_c1, top_c2 = st.columns([3.4, 1.2])
         with top_c1:
             st.markdown(
-                '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.77rem; color:#CBD5E1; margin-bottom:6px;">Edita en vivo bajas, traspasos, PPG de estrellas (`Star1_PPG`, `Star2_PPG`) o métricas base (`Pace`, `Off_Rtg`, `Def_Rtg`) en `st.session_state.df_nba`.</div>',
+                '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.77rem; color:#CBD5E1; margin-bottom:6px;">Métricas activas en <code>st.session_state.df_nba</code> (sincronizadas automáticamente con tu Excel o ediciones tácticas).</div>',
                 unsafe_allow_html=True,
             )
         with top_c2:
             if st.button("🔄 Restablecer Roster Oficial", use_container_width=True):
                 clean_df, src_label = load_clean_nba_dataframe()
-                st.session_state.df_nba = clean_df
                 st.session_state.lineups_nba = build_default_lineups_dict()
+                st.session_state.df_nba = sincronizar_df_nba_con_lineups(clean_df, st.session_state.lineups_nba)
                 st.session_state.data_source_label = src_label
+                st.session_state.excel_procesado_sig = None
+                st.session_state.excel_cargado_ok = False
+                st.session_state.df_excel_preview = None
                 st.session_state.roster_editor_version += 1
                 st.session_state.lineup_editor_version += 1
                 st.rerun()
@@ -487,9 +504,9 @@ def render_live_roster_manager() -> None:
                 "Star1_PPG": st.column_config.NumberColumn("Star1 PPG", min_value=0.0, max_value=60.0, step=0.5, format="%.1f"),
                 "Star2_Name": st.column_config.TextColumn("Estrella 2 (Co-Líder)", width="medium"),
                 "Star2_PPG": st.column_config.NumberColumn("Star2 PPG", min_value=0.0, max_value=60.0, step=0.5, format="%.1f"),
-                "Pace": st.column_config.NumberColumn("Pace Base", min_value=85.0, max_value=115.0, step=0.2, format="%.1f"),
-                "Off_Rtg": st.column_config.NumberColumn("Off_Rtg Base", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"),
-                "Def_Rtg": st.column_config.NumberColumn("Def_Rtg Base", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"),
+                "Pace": st.column_config.NumberColumn("Pace Activo", min_value=85.0, max_value=115.0, step=0.2, format="%.1f"),
+                "Off_Rtg": st.column_config.NumberColumn("Off_Rtg Activo", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"),
+                "Def_Rtg": st.column_config.NumberColumn("Def_Rtg Activo", min_value=95.0, max_value=135.0, step=0.2, format="%.1f"),
             },
         )
 
@@ -581,48 +598,79 @@ def main() -> None:
     inject_cyber_quant_css()
     init_session_state()
 
-    with st.sidebar:
-        st.markdown(
-            '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
-            '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v10.0</div>',
-            unsafe_allow_html=True,
+    st.sidebar.markdown(
+        '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
+        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v10.1</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ==========================================================================
+    # MÓDULO DE DESCARGA Y CARGA REACTIVA DE ROSTERS EN EXCEL (.XLSX)
+    # ==========================================================================
+    with st.sidebar.expander("📁 Importar / Exportar Rosters en Excel", expanded=True):
+        excel_bytes = construir_excel_plantilla_bytes(
+            lineups_dict=st.session_state.lineups_nba,
+            df_teams=st.session_state.df_nba,
         )
 
-        # ======================================================================
-        # MÓDULO DE DESCARGA Y CARGA DE ROSTERS Y QUINTETOS EN EXCEL (.XLSX)
-        # ======================================================================
-        with st.sidebar.expander("📁 Importar / Exportar Rosters en Excel", expanded=False):
-            df_plantilla_excel = generar_dataframe_plantilla_excel(
-                lineups_dict=st.session_state.lineups_nba,
-                df_teams=st.session_state.df_nba,
-            )
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                df_plantilla_excel.to_excel(writer, index=False, sheet_name="Rosters_NBA_30")
-            excel_bytes = excel_buffer.getvalue()
+        st.download_button(
+            label="📥 Descargar Plantilla Roster (Excel)",
+            data=excel_bytes,
+            file_name="nba_rosters_plantilla.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
-            st.download_button(
-                label="📥 Descargar Plantilla Roster (Excel)",
-                data=excel_bytes,
-                file_name="nba_rosters_plantilla.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
+        archivo_subido = st.file_uploader(
+            "Sube tu Excel editado (.xlsx)",
+            type=["xlsx"],
+            key="uploader_excel_rosters",
+        )
 
-            archivo_subido = st.file_uploader("Sube tu Excel editado (.xlsx)", type=["xlsx"])
-            if archivo_subido is not None:
+        if archivo_subido is not None:
+            raw_bytes = archivo_subido.getvalue()
+            content_hash = hashlib.md5(raw_bytes).hexdigest()
+            excel_signature = f"{archivo_subido.name}_{len(raw_bytes)}_{content_hash}"
+
+            # 1. RECARGA INMEDIATA TRAS LA SUBIDA (con bandera anti-bucle infinito)
+            if st.session_state.get("excel_procesado_sig") != excel_signature:
                 try:
-                    df_subido = pd.read_excel(archivo_subido)
-                    st.session_state.lineups_nba = parsear_excel_a_lineups(df_subido)
-                    st.session_state.data_source_label = f"Excel Personalizado ({archivo_subido.name})"
-                    firma_excel = f"{archivo_subido.name}_{archivo_subido.size}"
-                    if st.session_state.get("ultimo_excel_procesado") != firma_excel:
-                        st.session_state.ultimo_excel_procesado = firma_excel
-                        st.session_state.lineup_editor_version += 1
-                    st.success("✅ Rosters y quintetos actualizados desde Excel exitosamente.")
-                except Exception as exc:
-                    st.error(f"Error al procesar el archivo Excel: {exc}")
+                    df_subido = pd.read_excel(io.BytesIO(raw_bytes))
+                    lineups_actualizados = parsear_excel_a_lineups(df_subido, strict_240=False)
 
+                    # Guardar en st.session_state.lineups_nba y sincronizar st.session_state.df_nba
+                    st.session_state.lineups_nba = lineups_actualizados
+                    st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+                        st.session_state.df_nba, lineups_actualizados
+                    )
+                    st.session_state.df_excel_preview = df_subido.head(12).copy()
+                    st.session_state.data_source_label = f"Excel Activo ({archivo_subido.name})"
+                    st.session_state.excel_procesado_sig = excel_signature
+                    st.session_state.excel_cargado_ok = True
+                    st.session_state.lineup_editor_version += 1
+                    st.session_state.roster_editor_version += 1
+                    st.rerun()
+                except Exception as exc:
+                    st.session_state.excel_cargado_ok = False
+                    st.error(f"Error al procesar el archivo Excel: {exc}")
+        else:
+            if st.session_state.get("excel_procesado_sig") is not None:
+                st.session_state.excel_procesado_sig = None
+                st.session_state.excel_cargado_ok = False
+                st.session_state.df_excel_preview = None
+
+    # 3. FEEDBACK VISUAL EN LA BARRA LATERAL Y VISTA PREVIA DE CONFIRMACIÓN
+    if st.session_state.get("excel_cargado_ok") and st.session_state.get("df_excel_preview") is not None:
+        st.sidebar.success("✅ Roster cargado desde Excel exitosamente")
+        st.sidebar.caption("🔍 Vista previa en memoria (`st.session_state.lineups_nba`):")
+        st.sidebar.dataframe(
+            st.session_state.df_excel_preview[["Team_Abbr", "Pos", "Jugador", "Minutos", "O_EPM", "D_EPM"]],
+            use_container_width=True,
+            hide_index=True,
+            height=180,
+        )
+
+    with st.sidebar:
         st.markdown("### 🗓️ CARTELERA EN VIVO (ESPN API)")
         if st.button("🔄 Actualizar Calendario de Hoy", use_container_width=True):
             with st.spinner("Consultando calendario oficial del día desde ESPN Scoreboard API..."):
@@ -647,6 +695,9 @@ def main() -> None:
             st.cache_data.clear()
             with st.spinner(f"Descargando telemetría oficial desde stats.nba.com (Temporada {NBA_SEASON_TARGET})..."):
                 _, _, _, sync_ok = sincronizar_datos_nba_api(season=NBA_SEASON_TARGET)
+                st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+                    st.session_state.df_nba, st.session_state.lineups_nba
+                )
                 st.session_state.roster_editor_version += 1
                 st.session_state.lineup_editor_version += 1
                 if sync_ok:
@@ -655,7 +706,7 @@ def main() -> None:
         uploaded_csv = st.file_uploader("Cargar nba_stats_completo.csv (Opcional)", type=["csv"])
         if uploaded_csv is not None:
             custom_df, custom_label = load_clean_nba_dataframe(uploaded_csv)
-            st.session_state.df_nba = custom_df
+            st.session_state.df_nba = sincronizar_df_nba_con_lineups(custom_df, st.session_state.lineups_nba)
             st.session_state.data_source_label = custom_label
 
         st.button("🔄 Restablecer Todos los Quintetos", on_click=reset_all_lineups, use_container_width=True)
@@ -707,7 +758,7 @@ def main() -> None:
                 </div>
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
-            <div class="tv-subtitle">Arquitectura modular limpia (<code>styles.py</code>, <code>sync_espn.py</code>, <code>engine_nba.py</code>, <code>app.py</code>) con gestión de quintetos en Excel (.xlsx), calendario diario ESPN y motor Monte Carlo de 5,000 posesiones.</div>
+            <div class="tv-subtitle">Arquitectura modular limpia (<code>styles.py</code>, <code>sync_espn.py</code>, <code>engine_nba.py</code>, <code>app.py</code>) con sincronización reactiva de Excel en <code>st.session_state.lineups_nba</code> y motor Monte Carlo de 5,000 posesiones.</div>
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">CARTELERA HOY: <strong>{active_games_count} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{active_games_count * n_sims:,}</strong></div>
@@ -732,7 +783,7 @@ def main() -> None:
                     st.rerun()
 
             chosen_row = df_teams[df_teams["Team"] == chosen_team_for_lineup].iloc[0]
-            render_team_lineup_editor_panel(chosen_team_for_lineup, str(chosen_row["Team_Abbr"]), float(chosen_row["Pace"]), "global_lab")
+            render_team_lineup_editor_panel(chosen_team_for_lineup, str(chosen_row["Team_Abbr"]), float(chosen_row.get("Base_Pace", chosen_row["Pace"])), "global_lab")
 
         if usar_espn_en_vivo:
             selected_matchups = espn_matchups_validos
@@ -758,6 +809,7 @@ def main() -> None:
             st.info("Selecciona al menos un partido válido para visualizar la Cartelera NBA.")
             return
 
+        # 2. CONSUMO ESTRICTO DE st.session_state.lineups_nba EN LA CUADRÍCULA Y RADAR
         sim_results: List[Dict] = []
         for idx, (away_name, home_name) in enumerate(selected_matchups):
             away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
@@ -765,11 +817,14 @@ def main() -> None:
             away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
             c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(idx, (None, None))
 
+            away_lu_session = obtener_lineup_en_sesion(away_abbr)
+            home_lu_session = obtener_lineup_en_sesion(home_abbr)
+
             res = run_monte_carlo_matchup(
                 away_row_raw=away_row_raw,
                 home_row_raw=home_row_raw,
-                away_lineup=st.session_state.lineups_nba[away_abbr],
-                home_lineup=st.session_state.lineups_nba[home_abbr],
+                away_lineup=away_lu_session,
+                home_lineup=home_lu_session,
                 n_sims=n_sims,
                 hfa_pts=hfa_pts,
                 custom_spread_home=c_sp,
@@ -783,6 +838,7 @@ def main() -> None:
         render_slate_grid_3x3(sim_results, slate_meta=slate_meta)
 
     else:
+        # 2. CONSUMO ESTRICTO DE st.session_state.lineups_nba EN LA VISTA B (DETALLE)
         active_info = st.session_state.nba_partido_activo
         game_idx = int(active_info.get("idx", 0))
         away_name, home_name = str(active_info["away_team"]), str(active_info["home_team"])
@@ -800,11 +856,15 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
         with nav_c3:
-            if st.button("🔄 Reset Quintetos del Juego", key="reset_matchup_lineups_btn", use_container_width=True):
+            if st.button("🔄 Reset Quintetos a Base", key="reset_matchup_lineups_btn", use_container_width=True):
                 a_abbr = str(df_teams[df_teams["Team"] == away_name].iloc[0]["Team_Abbr"])
                 h_abbr = str(df_teams[df_teams["Team"] == home_name].iloc[0]["Team_Abbr"])
-                st.session_state.lineups_nba[a_abbr] = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[a_abbr])[LINEUP_COLS].copy()
-                st.session_state.lineups_nba[h_abbr] = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[h_abbr])[LINEUP_COLS].copy()
+                default_dict = build_default_lineups_dict()
+                st.session_state.lineups_nba[a_abbr] = default_dict[a_abbr]
+                st.session_state.lineups_nba[h_abbr] = default_dict[h_abbr]
+                st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+                    st.session_state.df_nba, st.session_state.lineups_nba
+                )
                 st.session_state.lineup_editor_version += 1
                 st.rerun()
 
@@ -813,11 +873,14 @@ def main() -> None:
         away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
         c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(game_idx, (None, None))
 
+        away_lu_session = obtener_lineup_en_sesion(away_abbr)
+        home_lu_session = obtener_lineup_en_sesion(home_abbr)
+
         detailed_res = run_monte_carlo_matchup(
             away_row_raw=away_row_raw,
             home_row_raw=home_row_raw,
-            away_lineup=st.session_state.lineups_nba[away_abbr],
-            home_lineup=st.session_state.lineups_nba[home_abbr],
+            away_lineup=away_lu_session,
+            home_lineup=home_lu_session,
             n_sims=n_sims,
             hfa_pts=hfa_pts,
             custom_spread_home=c_sp,

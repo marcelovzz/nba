@@ -2,6 +2,10 @@ import io
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+try:
+    import streamlit as st
+except ImportError:
+    st = None
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 LEAGUE_AVG_ORTG = 115.5
@@ -104,6 +108,10 @@ DEFAULT_LINEUPS_30_TEAMS: Dict[str, List[Dict]] = {
     "SAS": [{"Posición": "PG", "Jugador": "Chris Paul", "Minutos_Esperados": 28.0, "O_EPM": 1.6, "D_EPM": 0.4}, {"Posición": "SG", "Jugador": "Devin Vassell", "Minutos_Esperados": 33.0, "O_EPM": 1.9, "D_EPM": 0.1}, {"Posición": "SF", "Jugador": "Harrison Barnes", "Minutos_Esperados": 29.0, "O_EPM": 0.5, "D_EPM": -0.4}, {"Posición": "PF", "Jugador": "Jeremy Sochan", "Minutos_Esperados": 30.0, "O_EPM": -0.8, "D_EPM": 0.7}, {"Posición": "C", "Jugador": "Victor Wembanyama", "Minutos_Esperados": 34.0, "O_EPM": 2.9, "D_EPM": 4.5}, {"Posición": "BENCH", "Jugador": "Johnson / Castle / Tre Jones", "Minutos_Esperados": 86.0, "O_EPM": -1.4, "D_EPM": -0.1}],
 }
 
+# Alias de respaldo base (solo usado al inicializar sesión por primera vez o hacer reset explícito)
+QUINTETOS_BASE = DEFAULT_LINEUPS_30_TEAMS
+DEFAULT_TEAM_META_BY_ABBR: Dict[str, Dict] = {d["Team_Abbr"]: d for d in DEFAULT_CSV_DATA}
+
 
 def prob_to_fair_odds(prob: float) -> Tuple[str, str]:
     """Convierte una probabilidad (0-1) a cuota justa Decimal y Americana."""
@@ -124,8 +132,35 @@ def round_to_half_point(val: float) -> float:
 
 
 def build_default_lineups_dict() -> Dict[str, pd.DataFrame]:
-    """Construye el diccionario de DataFrames con los quintetos titulares de las 30 franquicias."""
+    """Construye el diccionario inicial de DataFrames con los quintetos titulares de las 30 franquicias."""
     return {abbr: pd.DataFrame(rows)[LINEUP_COLS].copy() for abbr, rows in DEFAULT_LINEUPS_30_TEAMS.items()}
+
+
+def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str, pd.DataFrame]] = None) -> pd.DataFrame:
+    """
+    Recupera obligatoriamente el quinteto de `st.session_state.lineups_nba` para `team_abbr`.
+    Soporta tanto estructura de diccionario `{abbr: DataFrame}` como DataFrame plano unificado.
+    """
+    abbr = str(team_abbr).strip().upper()
+    source = fallback_lineups
+    if source is None and (st is not None and hasattr(st, "session_state")) and "lineups_nba" in st.session_state:
+        source = st.session_state.lineups_nba
+
+    if isinstance(source, dict) and abbr in source:
+        return source[abbr].copy()
+
+    if isinstance(source, pd.DataFrame) and not source.empty and "Team_Abbr" in source.columns:
+        sub = source[source["Team_Abbr"].astype(str).str.strip().str.upper() == abbr].copy()
+        if not sub.empty:
+            if "Pos" in sub.columns and "Posición" not in sub.columns:
+                sub["Posición"] = sub["Pos"].apply(
+                    lambda x: "BENCH" if str(x).strip().upper() in {"BANCA", "BENCH"} else str(x).strip().upper()
+                )
+            if "Minutos" in sub.columns and "Minutos_Esperados" not in sub.columns:
+                sub["Minutos_Esperados"] = pd.to_numeric(sub["Minutos"], errors="coerce").fillna(0.0)
+            return sub
+
+    return pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[abbr])[LINEUP_COLS].copy()
 
 
 # ==============================================================================
@@ -138,7 +173,7 @@ def _interpretar_booleano_estrella(val) -> bool:
     if pd.isna(val):
         return False
     s = str(val).strip().upper()
-    return s in {"TRUE", "1", "1.0", "SI", "SÍ", "YES", "Y", "STAR", "ESTRELLA"}
+    return s in {"TRUE", "VERDADERO", "1", "1.0", "SI", "SÍ", "YES", "Y", "STAR", "ESTRELLA"}
 
 
 def generar_dataframe_plantilla_excel(
@@ -152,9 +187,15 @@ def generar_dataframe_plantilla_excel(
     Incluye los 5 titulares y la fila de 'Banca' por cada franquicia (minutos sumando 240 por equipo).
     """
     if df_teams is None:
-        df_teams = pd.DataFrame(DEFAULT_CSV_DATA)
+        if (st is not None and hasattr(st, "session_state")) and "df_nba" in st.session_state:
+            df_teams = st.session_state.df_nba
+        else:
+            df_teams = pd.DataFrame(DEFAULT_CSV_DATA)
     if lineups_dict is None:
-        lineups_dict = build_default_lineups_dict()
+        if (st is not None and hasattr(st, "session_state")) and "lineups_nba" in st.session_state:
+            lineups_dict = st.session_state.lineups_nba
+        else:
+            lineups_dict = build_default_lineups_dict()
 
     team_meta_map: Dict[str, Dict] = {}
     for _, row in df_teams.iterrows():
@@ -170,9 +211,7 @@ def generar_dataframe_plantilla_excel(
     ordered_abbrs = list(DEFAULT_LINEUPS_30_TEAMS.keys())
 
     for abbr in ordered_abbrs:
-        lu_df = lineups_dict.get(abbr)
-        if lu_df is None or lu_df.empty:
-            lu_df = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[abbr])
+        lu_df = obtener_lineup_en_sesion(abbr, fallback_lineups=lineups_dict)
 
         meta = team_meta_map.get(abbr, {})
         s1_name = meta.get("Star1_Name", "").lower()
@@ -227,13 +266,14 @@ def generar_dataframe_plantilla_excel(
     return df_out
 
 
-def parsear_excel_a_lineups(df_excel: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) -> Dict[str, pd.DataFrame]:
     """
     Valida que el DataFrame cargado desde Excel (.xlsx) contenga las columnas requeridas
     ['Team_Abbr', 'Pos', 'Jugador', 'Minutos', 'O_EPM', 'D_EPM', 'Pace_Diff', 'Es_Estrella', 'PPG_Linea']
-    y que los minutos por equipo sumen 240.
-    Convierte el DataFrame plano de vuelta al diccionario {team_abbr: DataFrame} que consume
-    el motor de simulación `run_monte_carlo_matchup`.
+    y procesa los minutos de cada franquicia (240 min por equipo).
+    Si `strict_240=False` (modo interactivo en la app), si un usuario redujo minutos de un titular
+    por lesión sin ajustar manualmente la fila de Banca, el motor conserva los minutos para aplicar
+    el ajuste de reemplazo en `calcular_ratings_lineup` sin rechazar el archivo Excel.
     """
     if df_excel is None or not isinstance(df_excel, pd.DataFrame) or df_excel.empty:
         raise ValueError("El archivo Excel subido está vacío o no contiene una tabla válida.")
@@ -250,7 +290,7 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
     df_clean = df_clean.dropna(subset=["Team_Abbr", "Jugador"], how="all").copy()
     df_clean["Team_Abbr"] = df_clean["Team_Abbr"].astype(str).str.strip().str.upper()
-    df_clean["Minutos"] = pd.to_numeric(df_clean["Minutos"], errors="coerce").fillna(0.0).astype(float)
+    df_clean["Minutos"] = pd.to_numeric(df_clean["Minutos"], errors="coerce").fillna(0.0).clip(lower=0.0).astype(float)
     df_clean["O_EPM"] = pd.to_numeric(df_clean["O_EPM"], errors="coerce").fillna(0.0).astype(float)
     df_clean["D_EPM"] = pd.to_numeric(df_clean["D_EPM"], errors="coerce").fillna(0.0).astype(float)
     df_clean["Pace_Diff"] = pd.to_numeric(df_clean["Pace_Diff"], errors="coerce").fillna(0.0).astype(float)
@@ -261,7 +301,7 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
     for team_abbr, group in df_clean.groupby("Team_Abbr", sort=False):
         total_team_mins = float(group["Minutos"].sum())
-        if abs(total_team_mins - 240.0) > 0.5:
+        if strict_240 and abs(total_team_mins - 240.0) > 0.5:
             raise ValueError(
                 f"Los minutos del equipo '{team_abbr}' suman {total_team_mins:.1f} "
                 f"(deben sumar exactamente 240.0 minutos por franquicia)."
@@ -407,15 +447,24 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
 def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
     """
     Actualiza dinámicamente Off_Rtg, Def_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
-    de la fila del equipo a partir de su quinteto activo (incluyendo metadatos Excel de
-    `Es_Estrella` y `PPG_Linea` si están presentes) antes de correr Monte Carlo.
+    de la fila del equipo a partir de su quinteto en sesión (incluyendo `Minutos`, `O_EPM`, `D_EPM`,
+    `Pace_Diff`, `Es_Estrella` y `PPG_Linea` cargados desde Excel).
     """
     updated = team_row.copy()
-    pace_base = float(team_row["Pace"])
+    t_abbr = str(team_row["Team_Abbr"]).strip().upper()
+    default_meta = DEFAULT_TEAM_META_BY_ABBR.get(t_abbr, {})
+    default_lu = {
+        str(r["Jugador"]).lower(): r for r in DEFAULT_LINEUPS_30_TEAMS.get(t_abbr, [])
+    }
+
+    pace_base = float(team_row.get("Base_Pace", default_meta.get("Pace", team_row["Pace"])))
+    base_off = float(team_row.get("Base_Off_Rtg", default_meta.get("Off_Rtg", team_row["Off_Rtg"])))
+    base_def = float(team_row.get("Base_Def_Rtg", default_meta.get("Def_Rtg", team_row["Def_Rtg"])))
+
     off_rtg, def_rtg, dyn_pace = calcular_ratings_lineup(df_lineup, pace_base)
 
-    updated["Base_Off_Rtg"] = float(team_row["Off_Rtg"])
-    updated["Base_Def_Rtg"] = float(team_row["Def_Rtg"])
+    updated["Base_Off_Rtg"] = base_off
+    updated["Base_Def_Rtg"] = base_def
     updated["Base_Pace"] = pace_base
 
     updated["Off_Rtg"] = off_rtg
@@ -426,78 +475,104 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_lineup.columns else "Minutos"
 
     starters_df = df_lineup[~df_lineup[pos_col].astype(str).str.upper().isin(["BENCH", "BANCA"])].copy()
-    if not starters_df.empty:
-        starters_df["Minutos_Esperados"] = pd.to_numeric(starters_df[mins_col], errors="coerce").fillna(0.0)
-        starters_df["O_EPM"] = pd.to_numeric(starters_df["O_EPM"], errors="coerce").fillna(0.0)
+    if starters_df.empty:
+        return updated
 
-        if "Es_Estrella" in starters_df.columns:
-            star_flags = starters_df["Es_Estrella"].apply(_interpretar_booleano_estrella)
-            flagged_stars = starters_df[star_flags & (starters_df["Minutos_Esperados"] > 0.5)].copy()
-            if len(flagged_stars) >= 1:
-                for idx_s in range(min(2, len(flagged_stars))):
-                    st_row = flagged_stars.iloc[idx_s]
-                    st_num = idx_s + 1
-                    st_name = str(st_row["Jugador"]).strip()
-                    st_mins = float(st_row["Minutos_Esperados"])
-                    st_oepm = float(st_row["O_EPM"])
-                    st_line = float(st_row.get("PPG_Linea", 0.0)) if "PPG_Linea" in st_row else 0.0
-                    if st_line > 0.0:
-                        updated[f"Star{st_num}_Name"] = st_name
-                        updated[f"Star{st_num}_Line"] = round_to_half_point(st_line)
-                        updated[f"Star{st_num}_PPG"] = round(st_line + 0.6, 1)
-                    else:
-                        est_ppg = round(max(8.5, (st_mins * 0.55) + (st_oepm * 1.75)), 1)
-                        updated[f"Star{st_num}_Name"] = st_name
-                        updated[f"Star{st_num}_PPG"] = est_ppg
-                        updated[f"Star{st_num}_Line"] = round_to_half_point(est_ppg)
-                if len(flagged_stars) >= 2:
-                    return updated
+    starters_df["Minutos_Esperados"] = pd.to_numeric(starters_df[mins_col], errors="coerce").fillna(0.0)
+    starters_df["O_EPM"] = pd.to_numeric(starters_df["O_EPM"], errors="coerce").fillna(0.0)
+    starters_df["score_impacto"] = starters_df["Minutos_Esperados"] * (1.0 + 0.16 * starters_df["O_EPM"])
 
-        for star_idx, default_mins in [(1, 35.0), (2, 33.0)]:
-            s_name = str(updated[f"Star{star_idx}_Name"])
-            base_ppg = float(updated[f"Star{star_idx}_PPG"])
-            match = starters_df[starters_df["Jugador"].astype(str).str.lower() == s_name.lower()]
+    def _calcular_ppg_y_linea_jugador(st_row: pd.Series, star_slot: int) -> Tuple[str, float, float]:
+        p_name = str(st_row["Jugador"]).strip()
+        p_mins = float(st_row["Minutos_Esperados"])
+        p_oepm = float(st_row["O_EPM"])
+        excel_line = float(st_row.get("PPG_Linea", 0.0)) if "PPG_Linea" in st_row and pd.notna(st_row["PPG_Linea"]) else 0.0
 
-            if not match.empty:
-                cur_mins = float(match.iloc[0]["Minutos_Esperados"])
-                cur_o_epm = float(match.iloc[0]["O_EPM"])
-                custom_line = float(match.iloc[0].get("PPG_Linea", 0.0)) if "PPG_Linea" in match.columns else 0.0
-                if cur_mins <= 0.5:
-                    active_starters = starters_df[starters_df["Minutos_Esperados"] > 5.0].copy()
-                    other_star_name = str(updated[f"Star{3 - star_idx}_Name"])
-                    active_candidates = active_starters[
-                        active_starters["Jugador"].astype(str).str.lower() != other_star_name.lower()
-                    ].copy()
-                    if not active_candidates.empty:
-                        active_candidates["score"] = active_candidates["Minutos_Esperados"] * (
-                            1.0 + 0.15 * active_candidates["O_EPM"]
-                        )
-                        replacement = active_candidates.sort_values("score", ascending=False).iloc[0]
-                        rep_name = str(replacement["Jugador"])
-                        rep_mins = float(replacement["Minutos_Esperados"])
-                        rep_o_epm = float(replacement["O_EPM"])
-                        rep_ppg = round(max(8.5, (rep_mins * 0.52) + (rep_o_epm * 1.65)), 1)
-                        updated[f"Star{star_idx}_Name"] = rep_name
-                        updated[f"Star{star_idx}_PPG"] = rep_ppg
-                        updated[f"Star{star_idx}_Line"] = float(np.floor(rep_ppg) + 0.5)
-                else:
-                    mins_ratio = cur_mins / default_mins
-                    updated[f"Star{star_idx}_PPG"] = round(max(4.0, base_ppg * mins_ratio + (cur_o_epm * 0.25)), 1)
-                    if custom_line > 0.0:
-                        updated[f"Star{star_idx}_Line"] = round_to_half_point(custom_line)
-            else:
-                active_starters = starters_df.sort_values(by=["O_EPM", "Minutos_Esperados"], ascending=False)
-                if len(active_starters) >= star_idx:
-                    cand = active_starters.iloc[star_idx - 1]
-                    c_name = str(cand["Jugador"])
-                    c_mins = float(cand["Minutos_Esperados"])
-                    c_oepm = float(cand["O_EPM"])
-                    c_ppg = round(max(8.5, (c_mins * 0.55) + (c_oepm * 1.75)), 1)
-                    updated[f"Star{star_idx}_Name"] = c_name
-                    updated[f"Star{star_idx}_PPG"] = c_ppg
-                    updated[f"Star{star_idx}_Line"] = float(np.floor(c_ppg) + 0.5)
+        # Verificar si coincide con Star1 o Star2 original de la franquicia
+        orig_s1 = str(default_meta.get("Star1_Name", "")).strip()
+        orig_s2 = str(default_meta.get("Star2_Name", "")).strip()
+        def_row = default_lu.get(p_name.lower(), {})
+        def_mins = float(def_row.get("Minutos_Esperados", 35.0 if star_slot == 1 else 33.0))
+        def_oepm = float(def_row.get("O_EPM", p_oepm))
+
+        if p_name.lower() == orig_s1.lower():
+            orig_ppg = float(default_meta.get("Star1_PPG", 25.0))
+            orig_line = float(default_meta.get("Star1_Line", 24.5))
+        elif p_name.lower() == orig_s2.lower():
+            orig_ppg = float(default_meta.get("Star2_PPG", 21.0))
+            orig_line = float(default_meta.get("Star2_Line", 20.5))
+        else:
+            orig_ppg = round(max(8.5, (def_mins * 0.54) + (def_oepm * 1.65)), 1)
+            orig_line = excel_line if excel_line > 0 else round_to_half_point(orig_ppg - 0.5)
+
+        mins_changed = abs(p_mins - def_mins) > 0.2
+        epm_changed = abs(p_oepm - def_oepm) > 0.05
+        line_changed = excel_line > 0.0 and abs(excel_line - orig_line) > 0.1
+
+        # Escalar PPG proyectado por minutos y O_EPM editados en Excel
+        proj_ppg = orig_ppg * (p_mins / max(def_mins, 1.0)) + (p_oepm - def_oepm) * 1.15
+        if line_changed and not mins_changed and not epm_changed:
+            # Si el usuario modificó únicamente PPG_Linea en el Excel
+            prop_line = round_to_half_point(excel_line)
+        elif excel_line > 0.0:
+            prop_line = round_to_half_point(excel_line)
+        else:
+            prop_line = round_to_half_point(max(0.5, proj_ppg - 0.5))
+
+        return p_name, round(max(4.0, proj_ppg), 1), prop_line
+
+    # Seleccionar los 2 jugadores estrella activos (Minutos > 0.5) priorizando Es_Estrella=True
+    active_starters = starters_df[starters_df["Minutos_Esperados"] > 0.5].copy()
+    if active_starters.empty:
+        active_starters = starters_df.copy()
+
+    if "Es_Estrella" in active_starters.columns:
+        active_starters["_star_flag"] = active_starters["Es_Estrella"].apply(_interpretar_booleano_estrella)
+        active_starters = active_starters.sort_values(
+            by=["_star_flag", "score_impacto"], ascending=[False, False]
+        )
+    else:
+        orig_names = [
+            str(updated.get("Star1_Name", "")).lower(),
+            str(updated.get("Star2_Name", "")).lower(),
+        ]
+        active_starters["_star_flag"] = active_starters["Jugador"].astype(str).str.lower().isin(orig_names)
+        active_starters = active_starters.sort_values(
+            by=["_star_flag", "score_impacto"], ascending=[False, False]
+        )
+
+    for star_slot in (1, 2):
+        if len(active_starters) >= star_slot:
+            chosen_row = active_starters.iloc[star_slot - 1]
+            s_name, s_ppg, s_line = _calcular_ppg_y_linea_jugador(chosen_row, star_slot)
+            updated[f"Star{star_slot}_Name"] = s_name
+            updated[f"Star{star_slot}_PPG"] = s_ppg
+            updated[f"Star{star_slot}_Line"] = s_line
 
     return updated
+
+
+def sincronizar_df_nba_con_lineups(
+    df_nba: pd.DataFrame, lineups_dict: Dict[str, pd.DataFrame]
+) -> pd.DataFrame:
+    """
+    Sincroniza inmediatamente `df_nba` (usado en el Gestor de Rosters y cabeceras)
+    con los quintetos cargados en `st.session_state.lineups_nba`.
+    """
+    df_sync = df_nba.copy()
+    for idx, row in df_sync.iterrows():
+        abbr = str(row["Team_Abbr"]).strip().upper()
+        lu_df = obtener_lineup_en_sesion(abbr, fallback_lineups=lineups_dict)
+        updated_row = apply_lineup_to_team_row(row, lu_df)
+        for col in [
+            "Pace", "Off_Rtg", "Def_Rtg",
+            "Base_Pace", "Base_Off_Rtg", "Base_Def_Rtg",
+            "Star1_Name", "Star1_PPG", "Star1_Line",
+            "Star2_Name", "Star2_PPG", "Star2_Line",
+        ]:
+            if col in updated_row:
+                df_sync.loc[idx, col] = updated_row[col]
+    return df_sync
 
 
 def simulate_player_prop(
@@ -575,16 +650,16 @@ def run_monte_carlo_matchup(
     seed: int = 42,
 ) -> Dict:
     """
-    Integra el Motor de Cálculo Ascendente (`calcular_ratings_lineup`) antes de lanzar
-    las 5,000 simulaciones de Monte Carlo basadas en posesiones.
+    Integra el Motor de Cálculo Ascendente (`calcular_ratings_lineup`) leyendo obligatoriamente
+    los quintetos en sesión (`st.session_state.lineups_nba`) antes de lanzar las 5,000 simulaciones.
     """
-    away_abbr = str(away_row_raw["Team_Abbr"])
-    home_abbr = str(home_row_raw["Team_Abbr"])
+    away_abbr = str(away_row_raw["Team_Abbr"]).strip().upper()
+    home_abbr = str(home_row_raw["Team_Abbr"]).strip().upper()
 
     if away_lineup is None:
-        away_lineup = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[away_abbr])[LINEUP_COLS]
+        away_lineup = obtener_lineup_en_sesion(away_abbr)
     if home_lineup is None:
-        home_lineup = pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[home_abbr])[LINEUP_COLS]
+        home_lineup = obtener_lineup_en_sesion(home_abbr)
 
     away_row = apply_lineup_to_team_row(away_row_raw, away_lineup)
     home_row = apply_lineup_to_team_row(home_row_raw, home_lineup)
