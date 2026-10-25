@@ -27,8 +27,13 @@ GAME_SLATE_TIMES: List[str] = [
 ]
 
 LINEUP_COLS: List[str] = ["Posición", "Jugador", "Minutos_Esperados", "O_EPM", "D_EPM"]
-EXCEL_TEMPLATE_COLS: List[str] = [
+EXCEL_TEMPLATE_BASE_COLS: List[str] = [
     "Team_Abbr", "Pos", "Jugador", "Minutos", "O_EPM", "D_EPM", "Pace_Diff", "Es_Estrella", "PPG_Linea",
+]
+EXCEL_TEMPLATE_COLS: List[str] = [
+    "Team_Abbr", "Pos", "Jugador", "Minutos", "Minutos_Base",
+    "O_EPM", "D_EPM", "Pace_Diff", "Es_Estrella",
+    "PPG_Base", "RPG_Base", "APG_Base", "PPG_Linea",
 ]
 ROSTER_EDITOR_COLS: List[str] = [
     "Team_Abbr", "Star1_Name", "Star1_PPG", "Star2_Name", "Star2_PPG", "Pace", "Off_Rtg", "Def_Rtg",
@@ -44,6 +49,72 @@ FULL_30_TEAM_SLATE: List[Tuple[str, str]] = [
     ("Brooklyn Nets", "Toronto Raptors"), ("Charlotte Hornets", "Washington Wizards"),
     ("Portland Trail Blazers", "Utah Jazz"),
 ]
+
+# ==============================================================================
+# MÉTRICAS BASE DE REBOTES (RPG_Base) Y ASISTENCIAS (APG_Base) PARA ESTRELLAS NBA
+# ==============================================================================
+STAR_BASE_REB_AST_MAP: Dict[str, Tuple[float, float]] = {
+    "jayson tatum": (8.6, 4.9),
+    "jaylen brown": (5.8, 3.7),
+    "cam thomas": (3.4, 3.1),
+    "dennis schroder": (3.1, 6.4),
+    "jalen brunson": (3.6, 6.9),
+    "karl-anthony towns": (11.2, 3.1),
+    "joel embiid": (11.0, 5.4),
+    "tyrese maxey": (3.8, 6.3),
+    "scottie barnes": (8.2, 6.1),
+    "rj barrett": (6.2, 4.1),
+    "zach lavine": (5.1, 4.2),
+    "coby white": (4.6, 5.2),
+    "donovan mitchell": (5.1, 5.9),
+    "darius garland": (2.9, 6.6),
+    "cade cunningham": (6.4, 8.2),
+    "jaden ivey": (3.9, 4.2),
+    "tyrese haliburton": (3.9, 10.4),
+    "pascal siakam": (7.3, 4.1),
+    "giannis antetokounmpo": (11.6, 6.4),
+    "damian lillard": (4.4, 7.1),
+    "nikola jokic": (12.4, 9.2),
+    "jamal murray": (4.1, 6.5),
+    "anthony edwards": (5.6, 5.1),
+    "julius randle": (9.0, 4.7),
+    "shai gilgeous-alexander": (5.5, 6.3),
+    "jalen williams": (5.2, 4.8),
+    "anfernee simons": (3.4, 5.4),
+    "jerami grant": (3.8, 2.7),
+    "lauri markkanen": (8.2, 2.1),
+    "keyonte george": (3.2, 5.6),
+    "stephen curry": (4.5, 5.4),
+    "jonathan kuminga": (5.2, 2.3),
+    "james harden": (5.8, 8.6),
+    "norman powell": (3.2, 2.2),
+    "lebron james": (7.4, 8.2),
+    "anthony davis": (12.5, 3.6),
+    "kevin durant": (6.6, 5.1),
+    "devin booker": (4.6, 6.8),
+    "de'aaron fox": (4.8, 5.8),
+    "demar derozan": (4.4, 5.1),
+    "trae young": (3.1, 10.8),
+    "jalen johnson": (9.4, 5.1),
+    "lamelo ball": (5.3, 8.0),
+    "brandon miller": (4.5, 3.1),
+    "jimmy butler": (5.6, 5.0),
+    "bam adebayo": (10.4, 4.1),
+    "paolo banchero": (7.2, 5.4),
+    "franz wagner": (5.7, 4.4),
+    "jordan poole": (2.9, 4.6),
+    "kyle kuzma": (6.6, 4.1),
+    "luka doncic": (9.1, 9.6),
+    "kyrie irving": (5.0, 5.3),
+    "alperen sengun": (9.6, 5.0),
+    "jalen green": (5.1, 3.6),
+    "ja morant": (5.6, 8.2),
+    "jaren jackson jr.": (6.1, 2.3),
+    "zion williamson": (6.2, 5.0),
+    "brandon ingram": (5.2, 5.6),
+    "victor wembanyama": (10.8, 3.9),
+    "devin vassell": (3.9, 4.1),
+}
 
 # ==============================================================================
 # BASE DE DATOS PREDETERMINADA: 30 FRANQUICIAS + QUINTETOS TITULARES EPM
@@ -124,6 +195,23 @@ def _normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _poisson_cdf(k_max: int, lam: float) -> float:
+    """
+    Calcula P(X <= k_max) para una distribución de Poisson con media esperada λ > 0
+    utilizando log-factoriales (math.lgamma) para evitar desbordamiento numérico.
+    """
+    if lam <= 0.0:
+        return 1.0 if k_max >= 0 else 0.0
+    if k_max < 0:
+        return 0.0
+    total_prob = 0.0
+    log_lam = math.log(lam)
+    for k in range(int(k_max) + 1):
+        log_pmf = -lam + k * log_lam - math.lgamma(k + 1)
+        total_prob += math.exp(log_pmf)
+    return float(np.clip(total_prob, 0.001, 0.999))
+
+
 def prob_to_fair_odds(prob: float) -> Tuple[str, str]:
     """
     Convierte una probabilidad (0-1) a cuota justa estrictamente en FORMATO DECIMAL
@@ -140,25 +228,98 @@ def round_to_half_point(val: float) -> float:
     return float(np.floor(val) + 0.5)
 
 
+def _derivar_metricas_base_jugador(
+    player_name: str,
+    pos: str,
+    minutos_base: float,
+    o_epm: float,
+    d_epm: float,
+    team_abbr: str = "",
+) -> Tuple[float, float, float]:
+    """
+    Deriva PPG_Base, RPG_Base y APG_Base realistas para cualquier jugador en función de su
+    nombre (si es estrella registrada), posición (PG, SG, SF, PF, C) y ratings O_EPM / D_EPM.
+    """
+    p_low = str(player_name).strip().lower()
+    pos_up = str(pos).strip().upper()
+    t_meta = DEFAULT_TEAM_META_BY_ABBR.get(str(team_abbr).strip().upper(), {})
+
+    if pos_up in {"BENCH", "BANCA"}:
+        return 0.0, 0.0, 0.0
+
+    # 1. PPG_Base
+    s1_name = str(t_meta.get("Star1_Name", "")).strip().lower()
+    s2_name = str(t_meta.get("Star2_Name", "")).strip().lower()
+    if p_low == s1_name and "Star1_PPG" in t_meta:
+        ppg_base = float(t_meta["Star1_PPG"])
+    elif p_low == s2_name and "Star2_PPG" in t_meta:
+        ppg_base = float(t_meta["Star2_PPG"])
+    else:
+        ppg_base = max(8.5, (minutos_base * 0.52) + (o_epm * 1.55))
+
+    # 2. RPG_Base y APG_Base
+    if p_low in STAR_BASE_REB_AST_MAP:
+        rpg_base, apg_base = STAR_BASE_REB_AST_MAP[p_low]
+    else:
+        min_scale = max(minutos_base, 18.0) / 34.0
+        if pos_up == "C":
+            rpg_base = (9.6 + max(0.0, d_epm) * 0.65) * min_scale
+            apg_base = (2.6 + max(0.0, o_epm) * 0.45) * min_scale
+        elif pos_up == "PF":
+            rpg_base = (7.4 + max(0.0, d_epm) * 0.55) * min_scale
+            apg_base = (3.2 + max(0.0, o_epm) * 0.45) * min_scale
+        elif pos_up == "SF":
+            rpg_base = (5.6 + max(0.0, d_epm) * 0.40) * min_scale
+            apg_base = (3.6 + max(0.0, o_epm) * 0.50) * min_scale
+        elif pos_up == "SG":
+            rpg_base = (4.3 + max(0.0, d_epm) * 0.30) * min_scale
+            apg_base = (4.4 + max(0.0, o_epm) * 0.55) * min_scale
+        else:  # PG
+            rpg_base = (4.0 + max(0.0, d_epm) * 0.25) * min_scale
+            apg_base = (6.8 + max(0.0, o_epm) * 0.70) * min_scale
+
+    return round(float(ppg_base), 1), round(float(rpg_base), 1), round(float(apg_base), 1)
+
+
 def build_default_lineups_dict() -> Dict[str, pd.DataFrame]:
-    """Construye el diccionario inicial de DataFrames con los quintetos titulares de las 30 franquicias."""
-    return {abbr: pd.DataFrame(rows)[LINEUP_COLS].copy() for abbr, rows in DEFAULT_LINEUPS_30_TEAMS.items()}
+    """
+    Construye el diccionario inicial de DataFrames con los quintetos titulares de las 30 franquicias,
+    incluyendo las métricas base requeridas ('PPG_Base', 'RPG_Base', 'APG_Base', 'Minutos_Base').
+    """
+    lineups_dict: Dict[str, pd.DataFrame] = {}
+    for abbr, rows in DEFAULT_LINEUPS_30_TEAMS.items():
+        enriched_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            pos_str = str(r["Posición"]).strip().upper()
+            p_name = str(r["Jugador"]).strip()
+            mins_esp = float(r["Minutos_Esperados"])
+            o_epm = float(r["O_EPM"])
+            d_epm = float(r["D_EPM"])
+            ppg_b, rpg_b, apg_b = _derivar_metricas_base_jugador(p_name, pos_str, mins_esp, o_epm, d_epm, abbr)
+            row_copy = dict(r)
+            row_copy["Minutos_Base"] = round(mins_esp, 1)
+            row_copy["PPG_Base"] = ppg_b
+            row_copy["RPG_Base"] = rpg_b
+            row_copy["APG_Base"] = apg_b
+            enriched_rows.append(row_copy)
+        lineups_dict[abbr] = pd.DataFrame(enriched_rows)
+    return lineups_dict
 
 
 def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str, pd.DataFrame]] = None) -> pd.DataFrame:
     """
     Recupera obligatoriamente el quinteto de `st.session_state.lineups_nba` para `team_abbr`.
-    Soporta tanto estructura de diccionario `{abbr: DataFrame}` como DataFrame plano unificado.
+    Garantiza que las columnas base ('Minutos_Base', 'PPG_Base', 'RPG_Base', 'APG_Base') estén presentes.
     """
     abbr = str(team_abbr).strip().upper()
     source = fallback_lineups
     if source is None and (st is not None and hasattr(st, "session_state")) and "lineups_nba" in st.session_state:
         source = st.session_state.lineups_nba
 
+    df_res: Optional[pd.DataFrame] = None
     if isinstance(source, dict) and abbr in source:
-        return source[abbr].copy()
-
-    if isinstance(source, pd.DataFrame) and not source.empty and "Team_Abbr" in source.columns:
+        df_res = source[abbr].copy()
+    elif isinstance(source, pd.DataFrame) and not source.empty and "Team_Abbr" in source.columns:
         sub = source[source["Team_Abbr"].astype(str).str.strip().str.upper() == abbr].copy()
         if not sub.empty:
             if "Pos" in sub.columns and "Posición" not in sub.columns:
@@ -167,13 +328,242 @@ def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str
                 )
             if "Minutos" in sub.columns and "Minutos_Esperados" not in sub.columns:
                 sub["Minutos_Esperados"] = pd.to_numeric(sub["Minutos"], errors="coerce").fillna(0.0)
-            return sub
+            df_res = sub
 
-    return pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[abbr])[LINEUP_COLS].copy()
+    if df_res is None:
+        df_res = build_default_lineups_dict()[abbr].copy()
+
+    # Asegurar que existan Minutos_Base, PPG_Base, RPG_Base y APG_Base
+    if not {"Minutos_Base", "PPG_Base", "RPG_Base", "APG_Base"}.issubset(df_res.columns):
+        default_lu = {
+            str(r["Jugador"]).lower(): r for r in DEFAULT_LINEUPS_30_TEAMS.get(abbr, [])
+        }
+        mins_base_list, ppg_b_list, rpg_b_list, apg_b_list = [], [], [], []
+        for _, r in df_res.iterrows():
+            p_name = str(r.get("Jugador", "")).strip()
+            pos_str = str(r.get("Posición", r.get("Pos", "PG"))).strip().upper()
+            def_r = default_lu.get(p_name.lower(), {})
+            m_base = float(r.get("Minutos_Base", def_r.get("Minutos_Esperados", r.get("Minutos_Esperados", 34.0))))
+            if m_base <= 0.0:
+                m_base = 34.0
+            o_epm = float(r.get("O_EPM", 0.0))
+            d_epm = float(r.get("D_EPM", 0.0))
+            ppg_d, rpg_d, apg_d = _derivar_metricas_base_jugador(p_name, pos_str, m_base, o_epm, d_epm, abbr)
+            mins_base_list.append(round(float(r.get("Minutos_Base", m_base)), 1))
+            ppg_b_list.append(round(float(r.get("PPG_Base", ppg_d)), 1))
+            rpg_b_list.append(round(float(r.get("RPG_Base", rpg_d)), 1))
+            apg_b_list.append(round(float(r.get("APG_Base", apg_d)), 1))
+        df_res["Minutos_Base"] = mins_base_list
+        df_res["PPG_Base"] = ppg_b_list
+        df_res["RPG_Base"] = rpg_b_list
+        df_res["APG_Base"] = apg_b_list
+
+    return df_res
 
 
 # ==============================================================================
-# DETECTORES DE VALOR CUANTITATIVO (+EV EN FORMATO DECIMAL)
+# MOTOR DE PROYECCIÓN DE PLAYER PROPS (PTS, REB, AST) Y VALOR +EV (POISSON DECIMAL)
+# ==============================================================================
+def evaluar_mercado_prop_poisson(
+    mercado: str,
+    lambda_esperada: float,
+    linea_mercado: float,
+    cuota_over_decimal: float = 1.91,
+    cuota_under_decimal: Optional[float] = None,
+    umbral_ev_pct: float = 5.0,
+) -> Dict[str, Any]:
+    """
+    Evalúa un mercado individual de Player Prop (PTS, REB o AST) frente a una línea de sportsbook
+    usando distribución de Poisson con media esperada λ y cuotas en formato decimal:
+      - Probabilidad de Under: P(X <= floor(linea))
+      - Probabilidad de Over: 1 - P(X <= floor(linea))
+      - Cuota justa decimal: `fair_odd = round(1.0 / prob, 2)`
+      - Valor esperado: `EV% = round(((prob * cuota_decimal_mercado) - 1.0) * 100, 1)`
+      - Regla de activación de Badge:
+        * Si `EV_over% >= 5.0%`: `[⚡ VALOR: OVER X.X @ Cuota (+EV%)]`
+        * Si `EV_under% >= 5.0%` o `EV_over% <= -5.0%` (cuando λ < línea): `[⚡ VALOR: UNDER X.X @ Cuota (+EV%)]`
+        * De lo contrario: `[LÍNEA JUSTA]`
+    """
+    lam = max(0.2, float(lambda_esperada))
+    linea = round(float(linea_mercado), 1)
+    c_over = round(max(1.01, float(cuota_over_decimal)), 2)
+    c_under = round(max(1.01, float(cuota_under_decimal if cuota_under_decimal is not None else cuota_over_decimal)), 2)
+
+    k_floor = int(math.floor(linea))
+    # Si la línea es entera (ej. 20.0), P(Under) = P(X <= 19) y P(Over) = P(X >= 21), normalizando sin push
+    if abs(linea - round(linea)) < 1e-6 and k_floor >= 1:
+        p_under_raw = _poisson_cdf(k_floor - 1, lam)
+        p_over_raw = 1.0 - _poisson_cdf(k_floor, lam)
+        denom = max(p_over_raw + p_under_raw, 0.01)
+        prob_over = float(np.clip(p_over_raw / denom, 0.01, 0.99))
+        prob_under = float(np.clip(1.0 - prob_over, 0.01, 0.99))
+    else:
+        prob_under = float(np.clip(_poisson_cdf(k_floor, lam), 0.01, 0.99))
+        prob_over = float(np.clip(1.0 - prob_under, 0.01, 0.99))
+
+    fair_odd_over = round(1.0 / prob_over, 2)
+    fair_odd_under = round(1.0 / prob_under, 2)
+
+    ev_over_pct = round(((prob_over * c_over) - 1.0) * 100.0, 1)
+    ev_under_pct = round(((prob_under * c_under) - 1.0) * 100.0, 1)
+
+    if ev_over_pct >= float(umbral_ev_pct):
+        pick_side = "OVER"
+        ev_display = ev_over_pct
+        cuota_activa = c_over
+        fair_odd_activa = fair_odd_over
+        prob_activa = round(prob_over * 100.0, 1)
+        badge_text = f"[⚡ VALOR: OVER {linea:.1f} @ {c_over:.2f} ({ev_display:+.1f}% EV)]"
+        badge_color = "#00ff88"
+        tiene_valor = True
+    elif ev_under_pct >= float(umbral_ev_pct) or (ev_over_pct <= -float(umbral_ev_pct) and lam < linea):
+        pick_side = "UNDER"
+        ev_display = ev_under_pct if ev_under_pct >= float(umbral_ev_pct) else round(abs(ev_over_pct), 1)
+        cuota_activa = c_under
+        fair_odd_activa = fair_odd_under
+        prob_activa = round(prob_under * 100.0, 1)
+        badge_text = f"[⚡ VALOR: UNDER {linea:.1f} @ {c_under:.2f} (+{abs(ev_display):.1f}% EV)]"
+        badge_color = "#ff3366"
+        tiene_valor = True
+    else:
+        pick_side = "LÍNEA JUSTA"
+        ev_display = ev_over_pct if prob_over >= prob_under else ev_under_pct
+        cuota_activa = c_over
+        fair_odd_activa = fair_odd_over if prob_over >= prob_under else fair_odd_under
+        prob_activa = round(max(prob_over, prob_under) * 100.0, 1)
+        badge_text = "[LÍNEA JUSTA]"
+        badge_color = "#555555"
+        tiene_valor = False
+
+    return {
+        "mercado": str(mercado).upper(),
+        "proyeccion": round(lam, 1),
+        "lambda": round(lam, 2),
+        "linea": linea,
+        "cuota": cuota_activa,
+        "cuota_over": c_over,
+        "cuota_under": c_under,
+        "prob_over": round(prob_over * 100.0, 1),
+        "prob_under": round(prob_under * 100.0, 1),
+        "fair_odd_over": fair_odd_over,
+        "fair_odd_under": fair_odd_under,
+        "fair_odd": fair_odd_activa,
+        "ev_over_pct": ev_over_pct,
+        "ev_under_pct": ev_under_pct,
+        "ev_pct": ev_display,
+        "pick": pick_side,
+        "prob_pick": prob_activa,
+        "badge": badge_text,
+        "badge_color": badge_color,
+        "valor": tiene_valor,
+    }
+
+
+def proyectar_props_jugador(
+    jugador_dict: Dict[str, Any],
+    minutos_proyectados: float,
+    pace_partido: float,
+    pace_promedio_liga: float = 99.5,
+    def_rating_rival: float = 115.0,
+    lineas_mercado: Optional[Dict[str, float]] = None,
+    cuotas_mercado: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    """
+    Motor Cuantitativo de Proyección de Player Props (PTS, REB, AST) y Auditoría de Valor +EV en Decimal:
+
+    1. Cálculo de Medias Esperadas (λ):
+       - Factor de ritmo: `factor_pace = pace_partido / pace_promedio_liga`
+       - Factor de minutos: `factor_min = minutos_proyectados / jugador_dict['Minutos_Base']`
+       - Puntos esperados (λ_PTS): `PPG_Base * factor_min * factor_pace * (def_rating_rival / 115.0)`
+       - Rebotes esperados (λ_REB): `RPG_Base * factor_min * factor_pace`
+       - Asistencias esperadas (λ_AST): `APG_Base * factor_min * factor_pace * (def_rating_rival / 115.0)`
+
+    2. Evaluación de Valor (+EV) con Distribución de Poisson:
+       - Calcula probabilidades Over/Under con distribución de Poisson de media λ.
+       - Calcula `fair_odd = round(1.0 / prob, 2)` y `EV% = round(((prob * cuota_decimal_mercado) - 1.0) * 100, 1)`.
+       - Activa `[⚡ VALOR: OVER X.X @ Cuota (+EV%)]`, `[⚡ VALOR: UNDER X.X @ Cuota (+EV%)]` o `[LÍNEA JUSTA]`.
+    """
+    nombre = str(jugador_dict.get("Jugador", jugador_dict.get("player_name", "Jugador"))).strip()
+    team_abbr = str(jugador_dict.get("Team_Abbr", jugador_dict.get("team_abbr", "NBA"))).strip().upper()
+    pos_str = str(jugador_dict.get("Posición", jugador_dict.get("Pos", "SF"))).strip().upper()
+    o_epm = float(jugador_dict.get("O_EPM", 2.0))
+    d_epm = float(jugador_dict.get("D_EPM", 0.5))
+
+    minutos_base = float(jugador_dict.get("Minutos_Base", 34.0))
+    if minutos_base <= 0.5:
+        minutos_base = 34.0
+
+    ppg_def, rpg_def, apg_def = _derivar_metricas_base_jugador(
+        nombre, pos_str, minutos_base, o_epm, d_epm, team_abbr
+    )
+    ppg_base = float(jugador_dict.get("PPG_Base", jugador_dict.get("base_ppg", ppg_def)))
+    rpg_base = float(jugador_dict.get("RPG_Base", rpg_def))
+    apg_base = float(jugador_dict.get("APG_Base", apg_def))
+
+    mins_proy = max(0.0, float(minutos_proyectados))
+    factor_pace = float(pace_partido) / max(float(pace_promedio_liga), 80.0)
+    factor_min = mins_proy / minutos_base
+    factor_def = float(def_rating_rival) / 115.0
+
+    # 1. Cálculo de Medias Esperadas (λ_PTS, λ_REB, λ_AST)
+    lambda_pts = max(0.5, ppg_base * factor_min * factor_pace * factor_def)
+    lambda_reb = max(0.3, rpg_base * factor_min * factor_pace)
+    lambda_ast = max(0.3, apg_base * factor_min * factor_pace * factor_def)
+
+    # Líneas de mercado por defecto (o personalizadas si se pasan en lineas_mercado / jugador_dict)
+    lineas_in = lineas_mercado or {}
+    cuotas_in = cuotas_mercado or {}
+
+    linea_pts = float(
+        lineas_in.get(
+            "PTS",
+            jugador_dict.get("PPG_Linea", jugador_dict.get("prop_line", round_to_half_point(max(0.5, ppg_base - 0.5)))),
+        )
+    )
+    linea_reb = float(
+        lineas_in.get(
+            "REB",
+            jugador_dict.get("RPG_Linea", round_to_half_point(max(0.5, rpg_base - 0.5))),
+        )
+    )
+    linea_ast = float(
+        lineas_in.get(
+            "AST",
+            jugador_dict.get("APG_Linea", round_to_half_point(max(0.5, apg_base - 0.5))),
+        )
+    )
+
+    cuota_pts = float(cuotas_in.get("PTS", jugador_dict.get("Cuota_PTS", 1.91)))
+    cuota_reb = float(cuotas_in.get("REB", jugador_dict.get("Cuota_REB", 1.91)))
+    cuota_ast = float(cuotas_in.get("AST", jugador_dict.get("Cuota_AST", 1.91)))
+
+    # 2. Auditoría Poisson +EV para cada uno de los 3 mercados
+    eval_pts = evaluar_mercado_prop_poisson("PTS", lambda_pts, linea_pts, cuota_over_decimal=cuota_pts)
+    eval_reb = evaluar_mercado_prop_poisson("REB", lambda_reb, linea_reb, cuota_over_decimal=cuota_reb)
+    eval_ast = evaluar_mercado_prop_poisson("AST", lambda_ast, linea_ast, cuota_over_decimal=cuota_ast)
+
+    return {
+        "jugador": nombre,
+        "team_abbr": team_abbr,
+        "posicion": pos_str,
+        "minutos_base": round(minutos_base, 1),
+        "minutos_proyectados": round(mins_proy, 1),
+        "ppg_base": round(ppg_base, 1),
+        "rpg_base": round(rpg_base, 1),
+        "apg_base": round(apg_base, 1),
+        "factor_pace": round(factor_pace, 3),
+        "factor_min": round(factor_min, 3),
+        "lambda_pts": round(lambda_pts, 1),
+        "lambda_reb": round(lambda_reb, 1),
+        "lambda_ast": round(lambda_ast, 1),
+        "PTS": eval_pts,
+        "REB": eval_reb,
+        "AST": eval_ast,
+    }
+
+
+# ==============================================================================
+# DETECTORES DE VALOR CUANTITATIVO DE PARTIDO (+EV EN FORMATO DECIMAL)
 # ==============================================================================
 def evaluar_valor_totales_nba(
     total_modelo: float,
@@ -184,27 +574,13 @@ def evaluar_valor_totales_nba(
     prob_over_sim: Optional[float] = None,
     prob_under_sim: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    Auditoría matemática de Totales (Over/Under) en formato estrictamente DECIMAL:
-    - Calcula la discrepancia: `edge_pts = total_modelo - total_mercado`
-    - Si `edge_pts >= umbral_pts`:
-      * Calcula probabilidad estimada del Over desde la distribución de Monte Carlo y su EV%:
-        `ev_pct = round(((prob_over * cuota_over) - 1.0) * 100, 1)`
-      * Retorna: `{'pick': 'OVER', 'linea': total_mercado, 'cuota': cuota_over, 'edge_pts': round(edge_pts, 1), 'ev_pct': ev_pct, 'badge_color': '#00ff88', 'valor': True}`
-    - Si `edge_pts <= -umbral_pts`:
-      * Calcula probabilidad del Under y su EV%:
-        `ev_pct = round(((prob_under * cuota_under) - 1.0) * 100, 1)`
-      * Retorna: `{'pick': 'UNDER', 'linea': total_mercado, 'cuota': cuota_under, 'edge_pts': round(abs(edge_pts), 1), 'ev_pct': ev_pct, 'badge_color': '#ff3366', 'valor': True}`
-    - Si la diferencia está dentro del margen:
-      * Retorna: `{'pick': 'LÍNEA EFICIENTE', 'valor': False, 'badge_color': '#555555'}`
-    """
+    """Auditoría matemática de Totales (Over/Under) en formato estrictamente DECIMAL."""
     t_mod = float(total_modelo)
     t_mkt = round(float(total_mercado), 1)
     c_over = round(float(cuota_over), 2)
     c_under = round(float(cuota_under), 2)
     edge_pts = t_mod - t_mkt
 
-    # Probabilidad estimada de cubrir el Over/Under desde la distribución de Monte Carlo
     if prob_over_sim is not None and 0.01 < float(prob_over_sim) < 0.99:
         prob_over = float(prob_over_sim)
     else:
@@ -264,23 +640,13 @@ def evaluar_valor_spread_nba(
     prob_home_cover_sim: Optional[float] = None,
     prob_away_cover_sim: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    Auditoría matemática de Hándicap / Spread en formato estrictamente DECIMAL:
-    Convención estándar de apuestas:
-      - `spread_mercado_home`: línea de hándicap del equipo local (ej. -6.5 si el local es favorito por 6.5 pts,
-        o +3.5 si el local es no-favorito).
-      - `spread_modelo`: hándicap justo proyectado por el modelo para el local (`proj_spread_home = -(pts_home - pts_away)`).
-      - Diferencial de ventaja para el Local (`edge_home_pts`): `spread_mercado_home - spread_modelo`.
-        * Si `edge_home_pts >= umbral_pts`, el modelo proyecta que el Local cubrirá la línea con ventaja de `edge_home_pts`.
-        * Si `edge_home_pts <= -umbral_pts`, la ventaja matemática favorece a la Visita (`AWAY`) por `abs(edge_home_pts)` pts.
-    """
+    """Auditoría matemática de Hándicap / Spread en formato estrictamente DECIMAL."""
     sp_mod = float(spread_modelo)
     sp_mkt_home = round(float(spread_mercado_home), 1)
     sp_mkt_away = round(-sp_mkt_home, 1)
     c_home = round(float(cuota_home), 2)
     c_away = round(float(cuota_away), 2)
 
-    # Ventaja en puntos a favor del Local respecto a la línea del mercado
     edge_home_pts = sp_mkt_home - sp_mod
     edge_away_pts = -edge_home_pts
 
@@ -362,9 +728,8 @@ def generar_dataframe_plantilla_excel(
 ) -> pd.DataFrame:
     """
     Consolida en un solo DataFrame plano la información de los 30 equipos para exportar a Excel (.xlsx).
-    Columnas exactas:
-        ['Team_Abbr', 'Pos', 'Jugador', 'Minutos', 'O_EPM', 'D_EPM', 'Pace_Diff', 'Es_Estrella', 'PPG_Linea']
-    Incluye los 5 titulares y la fila de 'Banca' por cada franquicia (minutos sumando 240 por equipo).
+    Incluye tanto las columnas operativas como las métricas base ('Minutos_Base', 'PPG_Base', 'RPG_Base', 'APG_Base')
+    para proyectar Puntos, Rebotes y Asistencias.
     """
     if df_teams is None:
         if (st is not None and hasattr(st, "session_state")) and "df_nba" in st.session_state:
@@ -392,6 +757,9 @@ def generar_dataframe_plantilla_excel(
 
     for abbr in ordered_abbrs:
         lu_df = obtener_lineup_en_sesion(abbr, fallback_lineups=lineups_dict)
+        default_lu = {
+            str(r["Jugador"]).lower(): r for r in DEFAULT_LINEUPS_30_TEAMS.get(abbr, [])
+        }
 
         meta = team_meta_map.get(abbr, {})
         s1_name = meta.get("Star1_Name", "").lower()
@@ -404,9 +772,21 @@ def generar_dataframe_plantilla_excel(
             pos_label = "Banca" if raw_pos.upper() in {"BENCH", "BANCA"} else raw_pos.upper()
             player_name = str(r.get("Jugador", "")).strip()
             mins_val = round(float(r.get("Minutos_Esperados", r.get("Minutos", 0.0))), 1)
+            def_r = default_lu.get(player_name.lower(), {})
+            mins_base_val = round(
+                float(r.get("Minutos_Base", def_r.get("Minutos_Esperados", mins_val if mins_val > 0 else 34.0))),
+                1,
+            )
             o_epm_val = round(float(r.get("O_EPM", 0.0)), 1)
             d_epm_val = round(float(r.get("D_EPM", 0.0)), 1)
             pace_diff_val = round(float(r.get("Pace_Diff", 0.0)), 2)
+
+            ppg_def, rpg_def, apg_def = _derivar_metricas_base_jugador(
+                player_name, pos_label, mins_base_val, o_epm_val, d_epm_val, abbr
+            )
+            ppg_base_val = round(float(r.get("PPG_Base", ppg_def)), 1)
+            rpg_base_val = round(float(r.get("RPG_Base", rpg_def)), 1)
+            apg_base_val = round(float(r.get("APG_Base", apg_def)), 1)
 
             if "Es_Estrella" in r and pd.notna(r["Es_Estrella"]):
                 es_estrella = _interpretar_booleano_estrella(r["Es_Estrella"])
@@ -423,8 +803,7 @@ def generar_dataframe_plantilla_excel(
             elif pos_label == "Banca":
                 ppg_linea = 0.0
             else:
-                est_ppg = max(8.5, (mins_val * 0.50) + (o_epm_val * 1.45))
-                ppg_linea = round_to_half_point(est_ppg)
+                ppg_linea = round_to_half_point(max(0.5, ppg_base_val - 0.5))
 
             records.append(
                 {
@@ -432,25 +811,29 @@ def generar_dataframe_plantilla_excel(
                     "Pos": pos_label,
                     "Jugador": player_name,
                     "Minutos": float(mins_val),
+                    "Minutos_Base": float(mins_base_val),
                     "O_EPM": float(o_epm_val),
                     "D_EPM": float(d_epm_val),
                     "Pace_Diff": float(pace_diff_val),
                     "Es_Estrella": bool(es_estrella),
+                    "PPG_Base": float(ppg_base_val),
+                    "RPG_Base": float(rpg_base_val),
+                    "APG_Base": float(apg_base_val),
                     "PPG_Linea": float(ppg_linea),
                 }
             )
 
     df_out = pd.DataFrame(records)[EXCEL_TEMPLATE_COLS]
-    for fcol in ["Minutos", "O_EPM", "D_EPM", "Pace_Diff", "PPG_Linea"]:
+    for fcol in ["Minutos", "Minutos_Base", "O_EPM", "D_EPM", "Pace_Diff", "PPG_Base", "RPG_Base", "APG_Base", "PPG_Linea"]:
         df_out[fcol] = df_out[fcol].astype(float)
     return df_out
 
 
 def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) -> Dict[str, pd.DataFrame]:
     """
-    Valida que el DataFrame cargado desde Excel (.xlsx) contenga las columnas requeridas
-    ['Team_Abbr', 'Pos', 'Jugador', 'Minutos', 'O_EPM', 'D_EPM', 'Pace_Diff', 'Es_Estrella', 'PPG_Linea']
-    y procesa los minutos de cada franquicia (240 min por equipo).
+    Valida y parsea el DataFrame cargado desde Excel (.xlsx).
+    Soporta o deriva automáticamente las métricas base por jugador:
+      - 'PPG_Base', 'RPG_Base', 'APG_Base' y 'Minutos_Base'.
     """
     if df_excel is None or not isinstance(df_excel, pd.DataFrame) or df_excel.empty:
         raise ValueError("El archivo Excel subido está vacío o no contiene una tabla válida.")
@@ -458,11 +841,11 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
     df_clean = df_excel.copy()
     df_clean.columns = [str(c).strip() for c in df_clean.columns]
 
-    missing_cols = [c for c in EXCEL_TEMPLATE_COLS if c not in df_clean.columns]
+    missing_cols = [c for c in EXCEL_TEMPLATE_BASE_COLS if c not in df_clean.columns]
     if missing_cols:
         raise ValueError(
             f"El archivo Excel no contiene las columnas requeridas: {', '.join(missing_cols)}. "
-            f"Columnas esperadas: {', '.join(EXCEL_TEMPLATE_COLS)}"
+            f"Columnas base esperadas: {', '.join(EXCEL_TEMPLATE_BASE_COLS)}"
         )
 
     df_clean = df_clean.dropna(subset=["Team_Abbr", "Jugador"], how="all").copy()
@@ -474,6 +857,11 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
     df_clean["PPG_Linea"] = pd.to_numeric(df_clean["PPG_Linea"], errors="coerce").fillna(0.0).astype(float)
     df_clean["Es_Estrella"] = df_clean["Es_Estrella"].apply(_interpretar_booleano_estrella)
 
+    has_min_base = "Minutos_Base" in df_clean.columns
+    has_ppg_base = "PPG_Base" in df_clean.columns
+    has_rpg_base = "RPG_Base" in df_clean.columns
+    has_apg_base = "APG_Base" in df_clean.columns
+
     lineups_parsed: Dict[str, pd.DataFrame] = build_default_lineups_dict()
 
     for team_abbr, group in df_clean.groupby("Team_Abbr", sort=False):
@@ -484,19 +872,59 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
                 f"(deben sumar exactamente 240.0 minutos por franquicia)."
             )
 
+        default_lu = {
+            str(r["Jugador"]).lower(): r for r in DEFAULT_LINEUPS_30_TEAMS.get(team_abbr, [])
+        }
+
         team_rows: List[Dict] = []
         for _, row in group.iterrows():
             raw_pos = str(row["Pos"]).strip().upper()
             internal_pos = "BENCH" if raw_pos in {"BANCA", "BENCH", "BN", "ROTACION", "ROTACIÓN"} else raw_pos
+            p_name = str(row["Jugador"]).strip()
+            mins_val = round(float(row["Minutos"]), 1)
+            o_epm_val = round(float(row["O_EPM"]), 1)
+            d_epm_val = round(float(row["D_EPM"]), 1)
+            def_r = default_lu.get(p_name.lower(), {})
+            def_mins = float(def_r.get("Minutos_Esperados", mins_val if mins_val > 0 else 34.0))
+
+            if has_min_base and pd.notna(row.get("Minutos_Base")) and float(row["Minutos_Base"]) > 0:
+                mins_base_val = round(float(row["Minutos_Base"]), 1)
+            else:
+                mins_base_val = round(def_mins if def_mins > 0 else 34.0, 1)
+
+            ppg_der, rpg_der, apg_der = _derivar_metricas_base_jugador(
+                p_name, internal_pos, mins_base_val, o_epm_val, d_epm_val, team_abbr
+            )
+
+            ppg_base_val = (
+                round(float(row["PPG_Base"]), 1)
+                if has_ppg_base and pd.notna(row.get("PPG_Base")) and float(row["PPG_Base"]) > 0
+                else ppg_der
+            )
+            rpg_base_val = (
+                round(float(row["RPG_Base"]), 1)
+                if has_rpg_base and pd.notna(row.get("RPG_Base")) and float(row["RPG_Base"]) > 0
+                else rpg_der
+            )
+            apg_base_val = (
+                round(float(row["APG_Base"]), 1)
+                if has_apg_base and pd.notna(row.get("APG_Base")) and float(row["APG_Base"]) > 0
+                else apg_der
+            )
+
             team_rows.append(
                 {
                     "Posición": internal_pos,
-                    "Jugador": str(row["Jugador"]).strip(),
-                    "Minutos_Esperados": round(float(row["Minutos"]), 1),
-                    "O_EPM": round(float(row["O_EPM"]), 1),
-                    "D_EPM": round(float(row["D_EPM"]), 1),
+                    "Jugador": p_name,
+                    "Minutos_Esperados": mins_val,
+                    "Minutos_Base": mins_base_val,
+                    "O_EPM": o_epm_val,
+                    "D_EPM": d_epm_val,
                     "Pace_Diff": round(float(row["Pace_Diff"]), 2),
                     "Es_Estrella": bool(row["Es_Estrella"]),
+                    "PPG_Base": ppg_base_val,
+                    "RPG_Base": rpg_base_val,
+                    "APG_Base": apg_base_val,
                     "PPG_Linea": round(float(row["PPG_Linea"]), 1),
                 }
             )
@@ -546,7 +974,7 @@ def construir_excel_plantilla_bytes(
                 cell.border = thin_border
                 if team_block % 2 == 1:
                     cell.fill = alt_fill
-                if col_idx in (1, 2, 8):
+                if col_idx in (1, 2, 9):
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                 elif col_idx == 3:
                     cell.alignment = Alignment(horizontal="left", vertical="center")
@@ -554,7 +982,10 @@ def construir_excel_plantilla_bytes(
                     cell.alignment = Alignment(horizontal="right", vertical="center")
                     cell.number_format = "0.0"
 
-        col_widths = {"A": 13, "B": 11, "C": 32, "D": 12, "E": 11, "F": 11, "G": 12, "H": 14, "I": 13}
+        col_widths = {
+            "A": 12, "B": 10, "C": 30, "D": 11, "E": 14,
+            "F": 10, "G": 10, "H": 11, "I": 13, "J": 12, "K": 12, "L": 12, "M": 12,
+        }
         for col_letter, width in col_widths.items():
             ws.column_dimensions[col_letter].width = width
 
@@ -624,8 +1055,7 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
 def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
     """
     Actualiza dinámicamente Off_Rtg, Def_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
-    de la fila del equipo a partir de su quinteto en sesión (incluyendo `Minutos`, `O_EPM`, `D_EPM`,
-    `Pace_Diff`, `Es_Estrella` y `PPG_Linea` cargados desde Excel).
+    de la fila del equipo a partir de su quinteto en sesión (incluyendo `PPG_Base`, `RPG_Base`, `APG_Base`, `Minutos_Base`).
     """
     updated = team_row.copy()
     t_abbr = str(team_row["Team_Abbr"]).strip().upper()
@@ -659,26 +1089,43 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     starters_df["O_EPM"] = pd.to_numeric(starters_df["O_EPM"], errors="coerce").fillna(0.0)
     starters_df["score_impacto"] = starters_df["Minutos_Esperados"] * (1.0 + 0.16 * starters_df["O_EPM"])
 
-    def _calcular_ppg_y_linea_jugador(st_row: pd.Series, star_slot: int) -> Tuple[str, float, float]:
+    def _calcular_ppg_y_linea_jugador(st_row: pd.Series, star_slot: int) -> Tuple[str, float, float, float, float, float, float]:
         p_name = str(st_row["Jugador"]).strip()
+        p_pos = str(st_row.get(pos_col, "SF")).strip().upper()
         p_mins = float(st_row["Minutos_Esperados"])
         p_oepm = float(st_row["O_EPM"])
+        p_depm = float(st_row.get("D_EPM", 0.0))
         excel_line = float(st_row.get("PPG_Linea", 0.0)) if "PPG_Linea" in st_row and pd.notna(st_row["PPG_Linea"]) else 0.0
 
         orig_s1 = str(default_meta.get("Star1_Name", "")).strip()
         orig_s2 = str(default_meta.get("Star2_Name", "")).strip()
         def_row = default_lu.get(p_name.lower(), {})
-        def_mins = float(def_row.get("Minutos_Esperados", 35.0 if star_slot == 1 else 33.0))
+        def_mins = float(st_row.get("Minutos_Base", def_row.get("Minutos_Esperados", 35.0 if star_slot == 1 else 33.0)))
+        if def_mins <= 0.5:
+            def_mins = 34.0
         def_oepm = float(def_row.get("O_EPM", p_oepm))
 
-        if p_name.lower() == orig_s1.lower():
+        ppg_der, rpg_der, apg_der = _derivar_metricas_base_jugador(
+            p_name, p_pos, def_mins, p_oepm, p_depm, t_abbr
+        )
+
+        if "PPG_Base" in st_row and pd.notna(st_row["PPG_Base"]) and float(st_row["PPG_Base"]) > 0:
+            orig_ppg = float(st_row["PPG_Base"])
+        elif p_name.lower() == orig_s1.lower():
             orig_ppg = float(default_meta.get("Star1_PPG", 25.0))
-            orig_line = float(default_meta.get("Star1_Line", 24.5))
         elif p_name.lower() == orig_s2.lower():
             orig_ppg = float(default_meta.get("Star2_PPG", 21.0))
+        else:
+            orig_ppg = ppg_der
+
+        rpg_base = float(st_row["RPG_Base"]) if "RPG_Base" in st_row and pd.notna(st_row["RPG_Base"]) and float(st_row["RPG_Base"]) > 0 else rpg_der
+        apg_base = float(st_row["APG_Base"]) if "APG_Base" in st_row and pd.notna(st_row["APG_Base"]) and float(st_row["APG_Base"]) > 0 else apg_der
+
+        if p_name.lower() == orig_s1.lower():
+            orig_line = float(default_meta.get("Star1_Line", 24.5))
+        elif p_name.lower() == orig_s2.lower():
             orig_line = float(default_meta.get("Star2_Line", 20.5))
         else:
-            orig_ppg = round(max(8.5, (def_mins * 0.54) + (def_oepm * 1.65)), 1)
             orig_line = excel_line if excel_line > 0 else round_to_half_point(orig_ppg - 0.5)
 
         mins_changed = abs(p_mins - def_mins) > 0.2
@@ -693,7 +1140,15 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
         else:
             prop_line = round_to_half_point(max(0.5, proj_ppg - 0.5))
 
-        return p_name, round(max(4.0, proj_ppg), 1), prop_line
+        return (
+            p_name,
+            round(max(4.0, proj_ppg), 1),
+            prop_line,
+            round(orig_ppg, 1),
+            round(rpg_base, 1),
+            round(apg_base, 1),
+            round(def_mins, 1),
+        )
 
     active_starters = starters_df[starters_df["Minutos_Esperados"] > 0.5].copy()
     if active_starters.empty:
@@ -717,10 +1172,17 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     for star_slot in (1, 2):
         if len(active_starters) >= star_slot:
             chosen_row = active_starters.iloc[star_slot - 1]
-            s_name, s_ppg, s_line = _calcular_ppg_y_linea_jugador(chosen_row, star_slot)
+            s_name, s_ppg, s_line, s_ppg_base, s_rpg_base, s_apg_base, s_min_base = _calcular_ppg_y_linea_jugador(
+                chosen_row, star_slot
+            )
             updated[f"Star{star_slot}_Name"] = s_name
             updated[f"Star{star_slot}_PPG"] = s_ppg
             updated[f"Star{star_slot}_Line"] = s_line
+            updated[f"Star{star_slot}_PPG_Base"] = s_ppg_base
+            updated[f"Star{star_slot}_RPG_Base"] = s_rpg_base
+            updated[f"Star{star_slot}_APG_Base"] = s_apg_base
+            updated[f"Star{star_slot}_Minutos_Base"] = s_min_base
+            updated[f"Star{star_slot}_Minutos_Proy"] = round(float(chosen_row["Minutos_Esperados"]), 1)
 
     return updated
 
@@ -741,7 +1203,9 @@ def sincronizar_df_nba_con_lineups(
             "Pace", "Off_Rtg", "Def_Rtg",
             "Base_Pace", "Base_Off_Rtg", "Base_Def_Rtg",
             "Star1_Name", "Star1_PPG", "Star1_Line",
+            "Star1_PPG_Base", "Star1_RPG_Base", "Star1_APG_Base", "Star1_Minutos_Base", "Star1_Minutos_Proy",
             "Star2_Name", "Star2_PPG", "Star2_Line",
+            "Star2_PPG_Base", "Star2_RPG_Base", "Star2_APG_Base", "Star2_Minutos_Base", "Star2_Minutos_Proy",
         ]:
             if col in updated_row:
                 df_sync.loc[idx, col] = updated_row[col]
@@ -763,8 +1227,17 @@ def simulate_player_prop(
     opp_style_def_ppp: float,
     opp_def_rtg: float,
     poss_sim: np.ndarray,
+    ppg_base_raw: Optional[float] = None,
+    rpg_base: float = 5.5,
+    apg_base: float = 4.8,
+    minutos_base: float = 34.0,
+    minutos_proyectados: float = 34.0,
 ) -> Dict:
-    """Motor de varianza para Player Props ajustado por el ritmo y la defensa rival (Cuotas Decimales)."""
+    """
+    Motor combinado para Player Props:
+    - Simula la varianza de puntos e integra `proyectar_props_jugador` para Puntos (PTS),
+      Rebotes (REB) y Asistencias (AST) con auditoría Poisson +EV en cuotas decimales.
+    """
     n_sims = len(poss_sim)
     pace_factor = exp_pace / max(team_pace, 85.0)
 
@@ -790,12 +1263,38 @@ def simulate_player_prop(
     dec_odds, _ = prob_to_fair_odds(lean_prob)
     style_label = "Iso_PPP_Def" if style.upper() == "ISO" else "PnR_PPP_Def"
 
+    jugador_dict = {
+        "Jugador": player_name,
+        "Team_Abbr": team_abbr,
+        "PPG_Base": float(ppg_base_raw if ppg_base_raw is not None else base_ppg),
+        "RPG_Base": float(rpg_base),
+        "APG_Base": float(apg_base),
+        "Minutos_Base": float(minutos_base),
+        "PPG_Linea": float(prop_line),
+        "RPG_Linea": round_to_half_point(max(0.5, rpg_base - 0.5)),
+        "APG_Linea": round_to_half_point(max(0.5, apg_base - 0.5)),
+    }
+    multi_props = proyectar_props_jugador(
+        jugador_dict=jugador_dict,
+        minutos_proyectados=minutos_proyectados,
+        pace_partido=exp_pace,
+        pace_promedio_liga=99.5,
+        def_rating_rival=opp_def_rtg,
+    )
+
     return {
         "player_name": player_name,
         "team_abbr": team_abbr,
         "opp_abbr": opp_abbr,
         "style": style.upper(),
         "base_ppg": float(base_ppg),
+        "ppg_base_raw": float(jugador_dict["PPG_Base"]),
+        "rpg_base": float(rpg_base),
+        "apg_base": float(apg_base),
+        "minutos_base": float(minutos_base),
+        "minutos_proyectados": float(minutos_proyectados),
+        "opp_def_rtg": float(opp_def_rtg),
+        "exp_pace": float(exp_pace),
         "proj_ppg": float(np.mean(sim_pts)),
         "prop_line": float(prop_line),
         "prob_over": prob_over,
@@ -808,6 +1307,8 @@ def simulate_player_prop(
         "p25": float(np.percentile(sim_pts, 25)),
         "p75": float(np.percentile(sim_pts, 75)),
         "matchup_note": f"vs {opp_abbr} {style_label} ({opp_style_def_ppp:.2f} PPP) | DefRtg {opp_def_rtg:.1f}",
+        "jugador_dict": jugador_dict,
+        "multi_props": multi_props,
     }
 
 
@@ -827,7 +1328,7 @@ def run_monte_carlo_matchup(
     """
     Integra el Motor de Cálculo Ascendente (`calcular_ratings_lineup`) leyendo obligatoriamente
     los quintetos en sesión (`st.session_state.lineups_nba`), ejecuta 5,000 simulaciones de Monte Carlo
-    y audita las líneas de las casas de apuestas en FORMATO DECIMAL (`evaluar_valor_totales_nba` y `evaluar_valor_spread_nba`).
+    y audita tanto las líneas de partido como los Player Props (PTS, REB, AST) en FORMATO DECIMAL.
     """
     away_abbr = str(away_row_raw["Team_Abbr"]).strip().upper()
     home_abbr = str(home_row_raw["Team_Abbr"]).strip().upper()
@@ -871,7 +1372,6 @@ def run_monte_carlo_matchup(
     away_adj_ortg = away_base_ortg + away_tactical_ortg_adj + away_tov_adj
     home_adj_ortg = home_base_ortg + home_tactical_ortg_adj + home_tov_adj
 
-    # Resolver líneas y cuotas decimales del mercado (The Odds API -> ESPN Consensus -> Consenso Base)
     mkt_info = market_odds_info or {}
     mkt_spread_val = mkt_info.get("spread_mercado_home")
     mkt_total_val = mkt_info.get("total_mercado")
@@ -956,7 +1456,6 @@ def run_monte_carlo_matchup(
     over_dec, over_amer = prob_to_fair_odds(over_prob)
     under_dec, under_amer = prob_to_fair_odds(under_prob)
 
-    # Ejecutar Detectores de Valor Cuantitativo (+EV en formato decimal)
     valor_totales = evaluar_valor_totales_nba(
         total_modelo=exp_total_pts,
         total_mercado=total_line,
@@ -1013,6 +1512,12 @@ def run_monte_carlo_matchup(
             s_style = str(side_row.get(f"Star{star_idx}_Style", "ISO")).upper()
             s_std = float(side_row.get(f"Star{star_idx}_Std", 5.6))
 
+            ppg_b_raw = float(side_row.get(f"Star{star_idx}_PPG_Base", s_ppg))
+            rpg_b_raw = float(side_row.get(f"Star{star_idx}_RPG_Base", 5.6))
+            apg_b_raw = float(side_row.get(f"Star{star_idx}_APG_Base", 4.8))
+            min_b_raw = float(side_row.get(f"Star{star_idx}_Minutos_Base", 34.0))
+            min_p_raw = float(side_row.get(f"Star{star_idx}_Minutos_Proy", min_b_raw))
+
             t_style_off = float(side_row["Iso_PPP_Off"]) if s_style == "ISO" else float(side_row["PnR_PPP_Off"])
             o_style_def = float(opp_row["Iso_PPP_Def"]) if s_style == "ISO" else float(opp_row["PnR_PPP_Def"])
 
@@ -1031,6 +1536,11 @@ def run_monte_carlo_matchup(
                 opp_style_def_ppp=o_style_def,
                 opp_def_rtg=o_def_rtg,
                 poss_sim=poss_sim,
+                ppg_base_raw=ppg_b_raw,
+                rpg_base=rpg_b_raw,
+                apg_base=apg_b_raw,
+                minutos_base=min_b_raw,
+                minutos_proyectados=min_p_raw,
             )
             prop_res["matchup_label"] = f"{away_abbr} @ {home_abbr}"
             props_list.append(prop_res)

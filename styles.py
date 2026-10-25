@@ -248,8 +248,30 @@ def inject_cyber_quant_css() -> None:
         .edge-pill-neg { background: rgba(244, 63, 94, 0.14); border: 1px solid rgba(244, 63, 94, 0.40); color: #F43F5E; font-family: 'JetBrains Mono', monospace; font-size: 0.70rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
         .edge-pill-neu { background: rgba(245, 158, 11, 0.14); border: 1px solid rgba(245, 158, 11, 0.40); color: #F59E0B; font-family: 'JetBrains Mono', monospace; font-size: 0.70rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
 
-        .prop-player-card { background: linear-gradient(150deg, rgba(17, 24, 46, 0.86) 0%, rgba(8, 12, 24, 0.94) 100%); border: 1px solid rgba(139, 92, 246, 0.28); border-radius: 12px; padding: 13px 15px; height: 100%; }
-        .prop-player-name { font-family: 'Orbitron', sans-serif; font-size: 0.88rem; font-weight: 800; color: #F8FAFC; }
+        .prop-player-card {
+            background: linear-gradient(150deg, rgba(17, 24, 46, 0.88) 0%, rgba(8, 12, 24, 0.95) 100%);
+            border: 1px solid rgba(139, 92, 246, 0.30); border-radius: 14px;
+            padding: 14px 16px; margin-bottom: 14px;
+        }
+        .prop-player-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding-bottom: 8px; margin-bottom: 10px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+            flex-wrap: wrap; gap: 8px;
+        }
+        .prop-player-name { font-family: 'Orbitron', sans-serif; font-size: 0.95rem; font-weight: 800; color: #F8FAFC; }
+        .prop-market-col-box {
+            background: rgba(5, 8, 17, 0.78);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 10px; padding: 10px 12px;
+            margin-top: 4px; font-family: 'JetBrains Mono', monospace;
+        }
+        .prop-market-title {
+            font-family: 'Orbitron', sans-serif; font-size: 0.74rem; font-weight: 800;
+            letter-spacing: 0.06em; color: #38BDF8; margin-bottom: 6px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .prop-lambda-val { font-size: 1.05rem; font-weight: 800; color: #00F5D4; }
         .prop-lean-over { color: #00F5D4; font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 0.96rem; }
         .prop-lean-under { color: #F59E0B; font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 0.96rem; }
 

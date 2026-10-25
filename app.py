@@ -32,6 +32,7 @@ from engine_nba import (
     generar_dataframe_plantilla_excel,
     obtener_lineup_en_sesion,
     parsear_excel_a_lineups,
+    proyectar_props_jugador,
     round_to_half_point,
     run_monte_carlo_matchup,
     sincronizar_df_nba_con_lineups,
@@ -139,6 +140,28 @@ def _construir_badge_spread_html(audit_sp: Dict[str, Any]) -> str:
     )
 
 
+def _construir_badge_prop_html(eval_mkt: Dict[str, Any]) -> str:
+    """
+    Construye el badge visual de Player Prop (PTS, REB, AST) evaluado por Poisson (+EV >= 5%):
+      - Verde neón (#00ff88): [⚡ VALOR: OVER X.X @ Cuota (+EV%)]
+      - Magenta/Rojo (#ff3366): [⚡ VALOR: UNDER X.X @ Cuota (+EV%)]
+      - Gris (#555555): [LÍNEA JUSTA]
+    """
+    badge_txt = str(eval_mkt.get("badge", "[LÍNEA JUSTA]"))
+    if eval_mkt.get("valor"):
+        pick = str(eval_mkt.get("pick", "OVER"))
+        color = str(eval_mkt.get("badge_color", "#00ff88"))
+        bg_rgba = "rgba(0, 255, 136, 0.14)" if pick == "OVER" else "rgba(255, 51, 102, 0.16)"
+        return (
+            f'<div class="ev-badge-pill" style="background:{bg_rgba}; border:1px solid {color}; color:{color};">'
+            f"{badge_txt}</div>"
+        )
+    return (
+        '<div class="ev-badge-pill" style="background:rgba(85,85,85,0.22); border:1px solid #555555; color:#94A3B8;">'
+        "[LÍNEA JUSTA]</div>"
+    )
+
+
 def render_slate_grid_3x3(
     sim_results: List[Dict],
     slate_meta: Optional[List[Dict]] = None,
@@ -174,7 +197,6 @@ def render_slate_grid_3x3(
             estado_str = meta.get("estado") or f"NBA · {NBA_SEASON_TARGET}"
             game_id = meta.get("id_partido") or f"{global_idx}_{away_abbr}_{home_abbr}"
 
-            # 1. Auditoría de Totales (Sportsbook vs. Modelo en Decimal)
             total_modelo = float(res["exp_total_pts"])
             total_mercado = float(res["total_line"])
             cuota_over_dec = float(res["cuota_over_decimal"])
@@ -192,7 +214,6 @@ def render_slate_grid_3x3(
             cuota_tot_display = cuota_over_dec if total_modelo >= total_mercado else cuota_under_dec
             badge_totales_html = _construir_badge_totales_html(audit_totales)
 
-            # 2. Auditoría de Hándicap / Spread (Sportsbook vs. Modelo en Decimal)
             spread_modelo_home = float(res["proj_spread_home"])
             spread_mercado_home = float(res["spread_line_home"])
             cuota_sp_home_dec = float(res["cuota_spread_home_decimal"])
@@ -211,7 +232,6 @@ def render_slate_grid_3x3(
             )
             badge_spread_html = _construir_badge_spread_html(audit_spread)
 
-            # Formatear comparativa de Hándicap (ej. BOS -6.5 @ 1.92 vs Modelo BOS -2.4)
             mkt_sp_str = f"{home_abbr} {spread_mercado_home:+.1f} @ {cuota_sp_home_dec:.2f}"
             mod_sp_str = (
                 f"{home_abbr} {spread_modelo_home:+.1f}"
@@ -344,6 +364,210 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
         st.rerun()
 
 
+def render_player_props_dossier_section(res: Dict) -> None:
+    """
+    SECCIÓN ACTUALIZADA DE PLAYER PROPS EN EL EXPEDIENTE DETALLADO (VISTA B):
+    Para cada jugador estrella del cruce:
+      - Muestra una tarjeta interactiva dividida en 3 columnas (PUNTOS, REBOTES, ASISTENCIAS):
+        * PUNTOS: Proyección Modelo (λ_PTS) | Línea Sportsbook (con cuota decimal) | Badge +EV
+        * REBOTES: Proyección Modelo (λ_REB) | Línea Sportsbook (con cuota decimal) | Badge +EV
+        * ASISTENCIAS: Proyección Modelo (λ_AST) | Línea Sportsbook (con cuota decimal) | Badge +EV
+      - Incluye campos editables para ingresar la línea del sportsbook (ej. Línea REB: 6.5, Cuota: 1.91)
+        con recálculo instantáneo mediante `proyectar_props_jugador`.
+    """
+    st.markdown(
+        '<div class="row-label-bar" style="border-left-color: #8B5CF6;">'
+        '<span class="row-label-title">🏀 FILA 4 // AUDITORÍA MULTIMERCADO DE PLAYER PROPS (PTS &bull; REB &bull; AST — POISSON +EV DECIMAL)</span>'
+        '<span class="row-label-sub">EDITA LÍNEAS Y CUOTAS DECIMALES DEL SPORTSBOOK EN VIVO (&ge;5.0% EV ACTIVA SEÑAL SHARP)</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    pace_partido = float(res["exp_possessions"])
+
+    for p_idx, prop in enumerate(res["props"]):
+        p_name = str(prop["player_name"])
+        t_abbr = str(prop["team_abbr"])
+        opp_abbr = str(prop["opp_abbr"])
+        style_tag = str(prop["style"])
+        opp_def_rtg = float(prop.get("opp_def_rtg", 115.0))
+
+        # Recuperar las métricas base y minutos actuales desde la sesión (por si el usuario editó minutos en la tabla de arriba)
+        lu_team_df = obtener_lineup_en_sesion(t_abbr)
+        player_match = lu_team_df[lu_team_df["Jugador"].astype(str).str.lower() == p_name.lower()]
+
+        if not player_match.empty:
+            p_row = player_match.iloc[0]
+            minutos_proyectados = float(p_row.get("Minutos_Esperados", prop.get("minutos_proyectados", 34.0)))
+            minutos_base = float(p_row.get("Minutos_Base", prop.get("minutos_base", 34.0)))
+            ppg_base = float(p_row.get("PPG_Base", prop.get("ppg_base_raw", prop["base_ppg"])))
+            rpg_base = float(p_row.get("RPG_Base", prop.get("rpg_base", 5.8)))
+            apg_base = float(p_row.get("APG_Base", prop.get("apg_base", 4.9)))
+        else:
+            minutos_proyectados = float(prop.get("minutos_proyectados", 34.0))
+            minutos_base = float(prop.get("minutos_base", 34.0))
+            ppg_base = float(prop.get("ppg_base_raw", prop["base_ppg"]))
+            rpg_base = float(prop.get("rpg_base", 5.8))
+            apg_base = float(prop.get("apg_base", 4.9))
+
+        default_pts_line = round_to_half_point(max(0.5, ppg_base - 0.5))
+        default_reb_line = round_to_half_point(max(0.5, rpg_base - 0.5))
+        default_ast_line = round_to_half_point(max(0.5, apg_base - 0.5))
+
+        st.markdown(
+            f"""
+            <div class="prop-player-card">
+                <div class="prop-player-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        {escudo_nba_html(t_abbr, 28)}
+                        <div>
+                            <div class="prop-player-name">{p_name.upper()} <span style="font-size:0.74rem; color:#00F5D4;">({t_abbr} vs {opp_abbr})</span></div>
+                            <div style="font-family:'JetBrains Mono',monospace; font-size:0.71rem; color:#94A3B8;">
+                                Base: <strong>{ppg_base:.1f} PPG</strong> &middot; <strong>{rpg_base:.1f} RPG</strong> &middot; <strong>{apg_base:.1f} APG</strong> &nbsp;|&nbsp;
+                                Minutos: <strong style="color:#F8FAFC;">{minutos_proyectados:.1f} Proy</strong> / {minutos_base:.1f} Base
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                        <span class="sb-chip">ESTILO: {style_tag}</span>
+                        <span class="sb-chip">PACE PARTIDO: {pace_partido:.1f}</span>
+                        <span class="sb-chip">DEF RIVAL ({opp_abbr}): {opp_def_rtg:.1f}</span>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        col_pts, col_reb, col_ast = st.columns(3)
+        key_base = f"prop_{res['matchup_id']}_{p_idx}_{t_abbr}"
+
+        with col_pts:
+            in_c1, in_c2 = st.columns(2)
+            with in_c1:
+                linea_pts = st.number_input(
+                    f"Línea PTS ({p_name})",
+                    min_value=0.5,
+                    max_value=65.5,
+                    value=float(default_pts_line),
+                    step=0.5,
+                    format="%.1f",
+                    key=f"{key_base}_pts_line",
+                )
+            with in_c2:
+                cuota_pts = st.number_input(
+                    f"Cuota PTS (Dec)",
+                    min_value=1.05,
+                    max_value=10.00,
+                    value=1.91,
+                    step=0.01,
+                    format="%.2f",
+                    key=f"{key_base}_pts_odd",
+                )
+
+        with col_reb:
+            in_r1, in_r2 = st.columns(2)
+            with in_r1:
+                linea_reb = st.number_input(
+                    f"Línea REB ({p_name})",
+                    min_value=0.5,
+                    max_value=30.5,
+                    value=float(default_reb_line),
+                    step=0.5,
+                    format="%.1f",
+                    key=f"{key_base}_reb_line",
+                )
+            with in_r2:
+                cuota_reb = st.number_input(
+                    f"Cuota REB (Dec)",
+                    min_value=1.05,
+                    max_value=10.00,
+                    value=1.91,
+                    step=0.01,
+                    format="%.2f",
+                    key=f"{key_base}_reb_odd",
+                )
+
+        with col_ast:
+            in_a1, in_a2 = st.columns(2)
+            with in_a1:
+                linea_ast = st.number_input(
+                    f"Línea AST ({p_name})",
+                    min_value=0.5,
+                    max_value=25.5,
+                    value=float(default_ast_line),
+                    step=0.5,
+                    format="%.1f",
+                    key=f"{key_base}_ast_line",
+                )
+            with in_a2:
+                cuota_ast = st.number_input(
+                    f"Cuota AST (Dec)",
+                    min_value=1.05,
+                    max_value=10.00,
+                    value=1.91,
+                    step=0.01,
+                    format="%.2f",
+                    key=f"{key_base}_ast_odd",
+                )
+
+        # Ejecutar motor cuantitativo de proyección y Poisson +EV con los inputs actuales
+        jugador_payload = {
+            "Jugador": p_name,
+            "Team_Abbr": t_abbr,
+            "PPG_Base": ppg_base,
+            "RPG_Base": rpg_base,
+            "APG_Base": apg_base,
+            "Minutos_Base": minutos_base,
+        }
+        proy_multi = proyectar_props_jugador(
+            jugador_dict=jugador_payload,
+            minutos_proyectados=minutos_proyectados,
+            pace_partido=pace_partido,
+            pace_promedio_liga=99.5,
+            def_rating_rival=opp_def_rtg,
+            lineas_mercado={"PTS": linea_pts, "REB": linea_reb, "AST": linea_ast},
+            cuotas_mercado={"PTS": cuota_pts, "REB": cuota_reb, "AST": cuota_ast},
+        )
+
+        for col_widget, mkt_code, mkt_title in [
+            (col_pts, "PTS", "🎯 PUNTOS (PTS)"),
+            (col_reb, "REB", "🛡️ REBOTES (REB)"),
+            (col_ast, "AST", "⚡ ASISTENCIAS (AST)"),
+        ]:
+            m_data = proy_multi[mkt_code]
+            badge_html = _construir_badge_prop_html(m_data)
+            with col_widget:
+                st.markdown(
+                    f"""
+                    <div class="prop-market-col-box">
+                        <div class="prop-market-title">
+                            <span>{mkt_title}</span>
+                            <span class="prop-lambda-val">&lambda; = {m_data['proyeccion']:.1f}</span>
+                        </div>
+                        <div class="audit-market-row">
+                            <span class="audit-market-label">Proyección Modelo:</span>
+                            <span class="audit-market-val" style="color:#00F5D4;">{m_data['proyeccion']:.1f} {mkt_code}</span>
+                        </div>
+                        <div class="audit-market-row">
+                            <span class="audit-market-label">Línea Sportsbook:</span>
+                            <span class="audit-market-val">O/U {m_data['linea']:.1f} @ {m_data['cuota']:.2f}</span>
+                        </div>
+                        <div class="audit-market-row">
+                            <span class="audit-market-label">Poisson Over / Under:</span>
+                            <span class="audit-market-val">{m_data['prob_over']:.1f}% / {m_data['prob_under']:.1f}%</span>
+                        </div>
+                        <div class="audit-market-row" style="margin-bottom:6px;">
+                            <span class="audit-market-label">Fair Odd (Over / Under):</span>
+                            <span class="audit-market-val">{m_data['fair_odd_over']:.2f} / {m_data['fair_odd_under']:.2f}</span>
+                        </div>
+                        {badge_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+
 def render_detailed_matchup_dossier(res: Dict) -> None:
     """
     VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO (FORMATO ESTRICTAMENTE DECIMAL)
@@ -408,6 +632,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
                     <div class="team-logo-box-64" style="background: linear-gradient(135deg, {home_c1}55, {home_c2}33); border: 1px solid {home_c2};">{escudo_nba_html(home_abbr, size=64)}</div>
                 </div>
             </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -505,28 +730,8 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        '<div class="row-label-bar" style="border-left-color: #8B5CF6;"><span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (CUOTAS JUSTAS DECIMALES)</span>'
-        '<span class="row-label-sub">SIMULACIÓN INDIVIDUAL AJUSTADA POR ESTILO DE DEFENSA RIVAL (ISO / PNR)</span></div>',
-        unsafe_allow_html=True,
-    )
-
-    prop_cols = st.columns(4)
-    for idx, prop in enumerate(res["props"]):
-        lean_cls = "prop-lean-over" if prop["lean_side"] == "OVER" else "prop-lean-under"
-        with prop_cols[idx]:
-            st.markdown(
-                f'<div class="prop-player-card"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">'
-                f'<span class="prop-player-name">{escudo_nba_html(prop["team_abbr"], 22)}{prop["player_name"]}</span><span class="sb-chip" style="font-size:0.66rem;">{prop["team_abbr"]} &bull; {prop["style"]}</span></div>'
-                f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.73rem; color:#94A3B8; margin-bottom:6px;">PPG Vigente: <strong>{prop["base_ppg"]:.1f}</strong> &rarr; Proy: <strong style="color:#F8FAFC;">{prop["proj_ppg"]:.1f} Pts</strong></div>'
-                f'<div style="background:rgba(5,8,17,0.72); border:1px solid rgba(148,163,184,0.16); border-radius:8px; padding:7px 10px; margin-bottom:6px;">'
-                f'<div class="{lean_cls}">{prop["lean_side"]} {prop["prop_line"]:.1f} PTS ({prop["lean_prob"]*100:.1f}%)</div>'
-                f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.70rem; color:#CBD5E1; margin-top:2px;">Fair Decimal: <strong>{prop["fair_dec"]}</strong> | IQR: {prop["p25"]:.0f}-{prop["p75"]:.0f}</div></div>'
-                f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.68rem; color:#94A3B8;">{prop["matchup_note"]}</div></div>',
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Renderizar Fila 4: Player Props Multimercado (PTS, REB, AST) con inputs en vivo
+    render_player_props_dossier_section(res)
 
 
 def init_session_state() -> None:
@@ -733,7 +938,7 @@ def main() -> None:
 
     st.sidebar.markdown(
         '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
-        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v11.0 (DECIMAL +EV)</div>',
+        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v12.0 (PTS/REB/AST +EV)</div>',
         unsafe_allow_html=True,
     )
 
@@ -793,8 +998,12 @@ def main() -> None:
     if st.session_state.get("excel_cargado_ok") and st.session_state.get("df_excel_preview") is not None:
         st.sidebar.success("✅ Roster cargado desde Excel exitosamente")
         st.sidebar.caption("🔍 Vista previa en memoria (`st.session_state.lineups_nba`):")
+        preview_cols = [
+            c for c in ["Team_Abbr", "Pos", "Jugador", "Minutos", "PPG_Base", "RPG_Base", "APG_Base"]
+            if c in st.session_state.df_excel_preview.columns
+        ]
         st.sidebar.dataframe(
-            st.session_state.df_excel_preview[["Team_Abbr", "Pos", "Jugador", "Minutos", "O_EPM", "D_EPM"]],
+            st.session_state.df_excel_preview[preview_cols],
             use_container_width=True,
             hide_index=True,
             height=180,
@@ -896,11 +1105,11 @@ def main() -> None:
                 <div class="font-mono" style="font-size:0.76rem; color:#94A3B8;">
                     FORMATO CUOTAS: <strong style="color:#00F5D4;">DECIMAL ESTRICTO</strong> &nbsp;|&nbsp;
                     SIMULATIONS: <strong style="color:#F8FAFC;">{n_sims:,} / GAME</strong> &nbsp;|&nbsp;
-                    UMBRAL +EV: <strong style="color:#38BDF8;">&ge;{umbral_ev_pts:.1f} PTS</strong>
+                    PROPS POISSON: <strong style="color:#38BDF8;">PTS &bull; REB &bull; AST (&ge;5% +EV)</strong>
                 </div>
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
-            <div class="tv-subtitle">Auditoría de líneas de mercado (The Odds API + ESPN Scoreboard Fallback) frente a 5,000 posesiones Monte Carlo con detección automática de valor (+EV) en Totales y Hándicap en formato decimal.</div>
+            <div class="tv-subtitle">Auditoría de líneas de mercado (Totales, Hándicap y Player Props de Puntos, Rebotes y Asistencias) frente a simulaciones Monte Carlo y Poisson en formato decimal.</div>
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">CARTELERA HOY: <strong>{active_games_count} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{active_games_count * n_sims:,}</strong></div>
