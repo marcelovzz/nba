@@ -1,6 +1,6 @@
 import hashlib
 import io
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
@@ -15,6 +15,7 @@ from sync_espn import (
     escudo_nba_html,
     load_clean_nba_dataframe,
     obtener_calendario_nba_hoy,
+    obtener_lineas_mercado_nba,
     sincronizar_datos_nba_api,
 )
 from engine_nba import (
@@ -25,6 +26,8 @@ from engine_nba import (
     build_default_lineups_dict,
     calcular_ratings_lineup,
     construir_excel_plantilla_bytes,
+    evaluar_valor_spread_nba,
+    evaluar_valor_totales_nba,
     extract_executive_radar,
     generar_dataframe_plantilla_excel,
     obtener_lineup_en_sesion,
@@ -43,9 +46,10 @@ st.set_page_config(
 
 
 def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
+    """Renderiza el Radar Ejecutivo superior con todas las cuotas estrictamente en FORMATO DECIMAL."""
     st.markdown(
         f'<div class="section-banner"><div class="section-banner-title">📡 RADAR EJECUTIVO DE LA JORNADA // TOP SYNDICATE PICKS</div>'
-        f'<div class="section-banner-tag">QUINTETOS EN SESIÓN ACTIVOS &bull; {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMS</div></div>',
+        f'<div class="section-banner-tag">FORMATO DECIMAL &bull; {games_count} PARTIDO(S) &bull; {games_count * n_sims:,} SIMS</div></div>',
         unsafe_allow_html=True,
     )
     c1, c2, c3, c4 = st.columns(4)
@@ -56,7 +60,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             f'<div class="radar-card lock-card"><div><div class="radar-tag">🔒 1. EL LOCK DE LA NOCHE</div>'
             f'<div class="radar-pick-main">{escudo_nba_html(lock["abbr"], 26)}{lock["team"]} ML</div>'
             f'<div class="radar-prob-big">{lock["prob"] * 100:.1f}% WIN</div></div>'
-            f'<div class="radar-meta">Fair Odds: <strong>{lock["dec"]} ({lock["amer"]})</strong><br/>{lock["context"]} | Dif: {lock["proj_margin"]:+.1f} pts</div></div>',
+            f'<div class="radar-meta">Fair Odd Decimal: <strong>{lock["dec"]}</strong><br/>{lock["context"]} | Dif: {lock["proj_margin"]:+.1f} pts</div></div>',
             unsafe_allow_html=True,
         )
     with c2:
@@ -64,7 +68,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             f'<div class="radar-card spread-card"><div><div class="radar-tag">⚡ 2. EL REY DEL SPREAD</div>'
             f'<div class="radar-pick-main">{escudo_nba_html(sp["abbr"], 26)}{sp["pick"]}</div>'
             f'<div class="radar-prob-big" style="color: #38BDF8;">{sp["prob"] * 100:.1f}% COVER</div></div>'
-            f'<div class="radar-meta">Fair Odds: <strong>{sp["dec"]} ({sp["amer"]})</strong><br/>{sp["context"]}</div></div>',
+            f'<div class="radar-meta">Fair Odd Decimal: <strong>{sp["dec"]}</strong><br/>{sp["context"]}</div></div>',
             unsafe_allow_html=True,
         )
     with c3:
@@ -72,7 +76,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             f'<div class="radar-card total-card"><div><div class="radar-tag">🎯 3. LA FIJA DE PUNTOS</div>'
             f'<div class="radar-pick-main">{escudo_nba_html(tot["abbr"], 26)}{tot["pick"]}</div>'
             f'<div class="radar-prob-big" style="color: #F59E0B;">{tot["prob"] * 100:.1f}% HIT</div></div>'
-            f'<div class="radar-meta">Fair Odds: <strong>{tot["dec"]} ({tot["amer"]})</strong><br/>{tot["context"]}</div></div>',
+            f'<div class="radar-meta">Fair Odd Decimal: <strong>{tot["dec"]}</strong><br/>{tot["context"]}</div></div>',
             unsafe_allow_html=True,
         )
     with c4:
@@ -81,19 +85,78 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
             f'<div class="radar-card prop-card"><div><div class="radar-tag">🏀 4. PLAYER PROP LEAN</div>'
             f'<div class="radar-pick-main">{escudo_nba_html(pr["team_abbr"], 26)}{pr["player_name"]} {lean_word} {pr["prop_line"]:.1f}</div>'
             f'<div class="radar-prob-big" style="color: #A78BFA;">{pr["lean_prob"] * 100:.1f}% ({pr["lean_side"]})</div></div>'
-            f'<div class="radar-meta">Proyección: <strong>{pr["proj_ppg"]:.1f} Pts</strong> | Fair: {pr["fair_dec"]} ({pr["fair_amer"]})<br/>{pr["matchup_note"]}</div></div>',
+            f'<div class="radar-meta">Proyección: <strong>{pr["proj_ppg"]:.1f} Pts</strong> | Fair Decimal: <strong>{pr["fair_dec"]}</strong><br/>{pr["matchup_note"]}</div></div>',
             unsafe_allow_html=True,
         )
 
 
-def render_slate_grid_3x3(sim_results: List[Dict], slate_meta: Optional[List[Dict]] = None) -> None:
+def _construir_badge_totales_html(audit_tot: Dict[str, Any]) -> str:
+    """
+    Construye el badge visual de Totales en formato estrictamente DECIMAL:
+      - Verde neón (#00ff88): [⚡ VALOR: OVER 226.5 @ 1.91 (+4.5 pts Edge | +7.8% EV)]
+      - Magenta/Rojo (#ff3366): [⚡ VALOR: UNDER 232.0 @ 1.95 (+3.8 pts Edge | +5.9% EV)]
+      - Gris (#555555): [TOTAL EFICIENTE]
+    """
+    if audit_tot.get("valor"):
+        pick = audit_tot["pick"]
+        linea = float(audit_tot["linea"])
+        cuota = float(audit_tot["cuota"])
+        edge_pts = float(audit_tot["edge_pts"])
+        ev_pct = float(audit_tot["ev_pct"])
+        color = str(audit_tot.get("badge_color", "#00ff88"))
+        bg_rgba = "rgba(0, 255, 136, 0.14)" if pick == "OVER" else "rgba(255, 51, 102, 0.16)"
+        text_label = f"[⚡ VALOR: {pick} {linea:.1f} @ {cuota:.2f} (+{edge_pts:.1f} pts Edge | {ev_pct:+.1f}% EV)]"
+        return (
+            f'<div class="ev-badge-pill" style="background:{bg_rgba}; border:1px solid {color}; color:{color};">'
+            f"{text_label}</div>"
+        )
+    return (
+        '<div class="ev-badge-pill" style="background:rgba(85,85,85,0.22); border:1px solid #555555; color:#94A3B8;">'
+        "[TOTAL EFICIENTE]</div>"
+    )
+
+
+def _construir_badge_spread_html(audit_sp: Dict[str, Any]) -> str:
+    """
+    Construye el badge visual de Hándicap / Spread en formato estrictamente DECIMAL:
+      - Cyan (#00e5ff): [⚡ VALOR SPREAD: NYK +6.5 @ 1.92 (+4.1 pts Edge | +8.3% EV)]
+      - Gris (#555555): [SPREAD EFICIENTE]
+    """
+    if audit_sp.get("valor"):
+        pick_label = str(audit_sp["pick"])
+        cuota = float(audit_sp["cuota"])
+        edge_pts = float(audit_sp["edge_pts"])
+        ev_pct = float(audit_sp["ev_pct"])
+        color = str(audit_sp.get("badge_color", "#00e5ff"))
+        text_label = f"[⚡ VALOR SPREAD: {pick_label} @ {cuota:.2f} (+{edge_pts:.1f} pts Edge | {ev_pct:+.1f}% EV)]"
+        return (
+            f'<div class="ev-badge-pill" style="background:rgba(0, 229, 255, 0.14); border:1px solid {color}; color:{color};">'
+            f"{text_label}</div>"
+        )
+    return (
+        '<div class="ev-badge-pill" style="background:rgba(85,85,85,0.22); border:1px solid #555555; color:#94A3B8;">'
+        "[SPREAD EFICIENTE]</div>"
+    )
+
+
+def render_slate_grid_3x3(
+    sim_results: List[Dict],
+    slate_meta: Optional[List[Dict]] = None,
+    umbral_ev_pts: float = 3.0,
+) -> None:
     """
     VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
-    Renderiza los partidos del día consumiendo estrictamente las métricas de `st.session_state.lineups_nba`.
+    Renderiza para cada partido un contenedor Cyber-Quant con:
+      - Marcador proyectado por Monte Carlo y escudos oficiales de ESPN.
+      - Comparativa de Totales: Sportsbook vs. Modelo con cuota decimal (ej. O/U 226.5 @ 1.91).
+      - Badge visual de Totales (+EV Over en verde neón, +EV Under en magenta/rojo, o Gris [TOTAL EFICIENTE]).
+      - Comparativa de Hándicap: Sportsbook vs. Modelo con cuota decimal (ej. BOS -6.5 @ 1.92).
+      - Badge visual de Hándicap (+EV Spread en cyan o Gris [SPREAD EFICIENTE]).
+      - Botón 'LEER ANÁLISIS →' con persistencia mediante st.session_state y st.rerun().
     """
     st.markdown(
-        f'<div class="section-banner"><div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) EN ESCANEO</div>'
-        f'<div class="section-banner-tag">HAZ CLIC EN "LEER ANÁLISIS &rarr;" PARA EDITAR QUINTETOS Y VER EL EXPEDIENTE</div></div>',
+        f'<div class="section-banner"><div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) AUDITADOS EN DECIMAL</div>'
+        f'<div class="section-banner-tag">UMBRAL +EV: &ge;{umbral_ev_pts:.1f} PTS &bull; CUOTAS DECIMALES EN VIVO</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -111,10 +174,52 @@ def render_slate_grid_3x3(sim_results: List[Dict], slate_meta: Optional[List[Dic
             estado_str = meta.get("estado") or f"NBA · {NBA_SEASON_TARGET}"
             game_id = meta.get("id_partido") or f"{global_idx}_{away_abbr}_{home_abbr}"
 
-            proj_spread_half = round_to_half_point(abs(res["proj_spread_home"]) - 0.5)
-            quick_spread_str = f"{home_abbr} -{proj_spread_half:.1f}" if res["proj_spread_home"] <= 0 else f"{away_abbr} -{proj_spread_half:.1f}"
-            quick_total_half = round_to_half_point(res["exp_total_pts"])
+            # 1. Auditoría de Totales (Sportsbook vs. Modelo en Decimal)
+            total_modelo = float(res["exp_total_pts"])
+            total_mercado = float(res["total_line"])
+            cuota_over_dec = float(res["cuota_over_decimal"])
+            cuota_under_dec = float(res["cuota_under_decimal"])
+
+            audit_totales = evaluar_valor_totales_nba(
+                total_modelo=total_modelo,
+                total_mercado=total_mercado,
+                cuota_over=cuota_over_dec,
+                cuota_under=cuota_under_dec,
+                umbral_pts=umbral_ev_pts,
+                prob_over_sim=float(res["over_prob"]),
+                prob_under_sim=float(res["under_prob"]),
+            )
+            cuota_tot_display = cuota_over_dec if total_modelo >= total_mercado else cuota_under_dec
+            badge_totales_html = _construir_badge_totales_html(audit_totales)
+
+            # 2. Auditoría de Hándicap / Spread (Sportsbook vs. Modelo en Decimal)
+            spread_modelo_home = float(res["proj_spread_home"])
+            spread_mercado_home = float(res["spread_line_home"])
+            cuota_sp_home_dec = float(res["cuota_spread_home_decimal"])
+            cuota_sp_away_dec = float(res["cuota_spread_away_decimal"])
+
+            audit_spread = evaluar_valor_spread_nba(
+                spread_modelo=spread_modelo_home,
+                spread_mercado_home=spread_mercado_home,
+                cuota_home=cuota_sp_home_dec,
+                cuota_away=cuota_sp_away_dec,
+                umbral_pts=umbral_ev_pts,
+                home_abbr=home_abbr,
+                away_abbr=away_abbr,
+                prob_home_cover_sim=float(res["home_cover_prob"]),
+                prob_away_cover_sim=float(res["away_cover_prob"]),
+            )
+            badge_spread_html = _construir_badge_spread_html(audit_spread)
+
+            # Formatear comparativa de Hándicap (ej. BOS -6.5 @ 1.92 vs Modelo BOS -2.4)
+            mkt_sp_str = f"{home_abbr} {spread_mercado_home:+.1f} @ {cuota_sp_home_dec:.2f}"
+            mod_sp_str = (
+                f"{home_abbr} {spread_modelo_home:+.1f}"
+                if spread_modelo_home <= 0
+                else f"{away_abbr} {-spread_modelo_home:+.1f}"
+            )
             fav_win_pct = res["fav_base_win"] * 100.0
+            fav_ml_dec = res["home_ml_dec"] if res["fav_abbr"] == home_abbr else res["away_ml_dec"]
 
             with cols[col_idx]:
                 st.markdown(
@@ -127,20 +232,44 @@ def render_slate_grid_3x3(sim_results: List[Dict], slate_meta: Optional[List[Dic
                         <div class="grid-team-row">
                             <div class="grid-team-info">
                                 {escudo_nba_html(away_abbr, size=32)}
-                                <div><span class="grid-team-abbr">{away_abbr}</span><span class="grid-team-fullname">ORTG {away_row['Off_Rtg']:.1f} &middot; DRTG {away_row['Def_Rtg']:.1f}</span></div>
+                                <div>
+                                    <span class="grid-team-abbr">{away_abbr}</span>
+                                    <span class="grid-team-fullname">ORTG {away_row['Off_Rtg']:.1f} &middot; DRTG {away_row['Def_Rtg']:.1f}</span>
+                                </div>
                             </div>
-                            {render_form_pills_html(away_abbr)}
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                {render_form_pills_html(away_abbr)}
+                                <span class="grid-proj-pts">{res['exp_away_pts']:.1f}</span>
+                            </div>
                         </div>
                         <div class="grid-team-row">
                             <div class="grid-team-info">
                                 {escudo_nba_html(home_abbr, size=32)}
-                                <div><span class="grid-team-abbr">{home_abbr}</span><span class="grid-team-fullname">ORTG {home_row['Off_Rtg']:.1f} &middot; DRTG {home_row['Def_Rtg']:.1f}</span></div>
+                                <div>
+                                    <span class="grid-team-abbr">{home_abbr}</span>
+                                    <span class="grid-team-fullname">ORTG {home_row['Off_Rtg']:.1f} &middot; DRTG {home_row['Def_Rtg']:.1f}</span>
+                                </div>
                             </div>
-                            {render_form_pills_html(home_abbr)}
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                {render_form_pills_html(home_abbr)}
+                                <span class="grid-proj-pts">{res['exp_home_pts']:.1f}</span>
+                            </div>
+                        </div>
+                        <div class="audit-market-box">
+                            <div class="audit-market-row">
+                                <span class="audit-market-label">TOTALES (MKT vs MOD):</span>
+                                <span class="audit-market-val">O/U {total_mercado:.1f} @ {cuota_tot_display:.2f} &nbsp;|&nbsp; Proy: {total_modelo:.1f}</span>
+                            </div>
+                            {badge_totales_html}
+                            <div class="audit-market-row" style="margin-top:8px;">
+                                <span class="audit-market-label">HÁNDICAP (MKT vs MOD):</span>
+                                <span class="audit-market-val">{mkt_sp_str} &nbsp;|&nbsp; Proy: {mod_sp_str}</span>
+                            </div>
+                            {badge_spread_html}
                         </div>
                         <div class="grid-quick-forecast">
-                            <span class="grid-forecast-lines">{quick_spread_str} &nbsp;|&nbsp; O/U {quick_total_half:.1f}</span>
-                            <span class="grid-forecast-win">{res['fav_abbr']} {fav_win_pct:.1f}% WIN</span>
+                            <span class="grid-forecast-lines">PROY MC: {away_abbr} {res['exp_away_pts']:.1f} - {res['exp_home_pts']:.1f} {home_abbr}</span>
+                            <span class="grid-forecast-win">{res['fav_abbr']} {fav_win_pct:.1f}% (Fair {fav_ml_dec})</span>
                         </div>
                     </div>
                     """,
@@ -217,7 +346,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
 
 def render_detailed_matchup_dossier(res: Dict) -> None:
     """
-    VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO
+    VISTA B: EXPEDIENTE CUANTITATIVO DETALLADO (FORMATO ESTRICTAMENTE DECIMAL)
     Consume obligatoriamente `st.session_state.lineups_nba` tanto en las tablas de quintetos como en las 4 filas Monte Carlo.
     """
     away_abbr, home_abbr = res["away_abbr"], res["home_abbr"]
@@ -229,7 +358,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
     home_c1, home_c2 = TEAM_COLORS.get(home_abbr, ("#1E293B", "#00F5D4"))
 
     proj_spread_str = f"{home_abbr} {res['proj_spread_home']:+.1f}" if res["proj_spread_home"] <= 0 else f"{away_abbr} {-res['proj_spread_home']:+.1f}"
-    mkt_spread_str = f"{home_abbr} {res['spread_line_home']:+.1f}"
+    mkt_spread_str = f"{home_abbr} {res['spread_line_home']:+.1f} @ {res['cuota_spread_home_decimal']:.2f}"
 
     st.markdown(
         '<div class="section-banner"><div class="section-banner-title">♟️ GESTOR INTERACTIVO DE QUINTETOS TITULARES (BOTTOM-UP EPM AGGREGATOR)</div>'
@@ -266,8 +395,8 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
                     <div class="sb-lines-row">
                         <span class="sb-chip">PACE ESP: {res['exp_possessions']:.1f} POS</span>
                         <span class="sb-chip">SPREAD PROY: {proj_spread_str}</span>
-                        <span class="sb-chip">MKT LINE: {mkt_spread_str}</span>
-                        <span class="sb-chip">TOTAL PROY: {res['exp_total_pts']:.1f} (MKT {res['total_line']:.1f})</span>
+                        <span class="sb-chip">MKT: {mkt_spread_str}</span>
+                        <span class="sb-chip">TOTAL PROY: {res['exp_total_pts']:.1f} (MKT {res['total_line']:.1f} @ {res['cuota_over_decimal']:.2f})</span>
                     </div>
                 </div>
                 <div class="sb-team-block right">
@@ -284,37 +413,37 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
     )
 
     st.markdown(
-        f'<div class="row-label-bar"><span class="row-label-title">📊 FILA 1 // RESUMEN DE SIMULACIÓN MONTE CARLO ({res["n_sims"]:,} ITERACIONES)</span>'
-        f'<span class="row-label-sub">WIN % &bull; SPREAD COVER % &bull; TOTAL OVER/UNDER &bull; FAIR ODDS</span></div>',
+        f'<div class="row-label-bar"><span class="row-label-title">📊 FILA 1 // AUDITORÍA DE SIMULACIÓN MONTE CARLO ({res["n_sims"]:,} ITERACIONES)</span>'
+        f'<span class="row-label-sub">WIN % &bull; SPREAD COVER % &bull; TOTAL OVER/UNDER &bull; CUOTAS DECIMALES</span></div>',
         unsafe_allow_html=True,
     )
 
     f1_c1, f1_c2, f1_c3 = st.columns(3)
     with f1_c1:
         st.markdown(
-            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>🏆 MONEYLINE (PROB. VICTORIA)</span><span style="color:#00F5D4;">NO-VIG FAIR ODDS</span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} (Visita)</span><span><span class="sim-prob-val">{res["away_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">{res["away_ml_dec"]} / {res["away_ml_amer"]}</span></span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} (Local)</span><span><span class="sim-prob-val">{res["home_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">{res["home_ml_dec"]} / {res["home_ml_amer"]}</span></span></div>'
+            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>🏆 MONEYLINE (PROB. VICTORIA)</span><span style="color:#00F5D4;">FAIR ODDS DECIMALES</span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} (Visita)</span><span><span class="sim-prob-val">{res["away_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">Fair {res["away_ml_dec"]}</span></span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} (Local)</span><span><span class="sim-prob-val">{res["home_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">Fair {res["home_ml_dec"]}</span></span></div>'
             f'<div class="quant-bar-track"><div class="quant-bar-fill-left" style="width: {res["away_win_prob"]*100:.1f}%;"></div><div class="quant-bar-fill-right" style="width: {res["home_win_prob"]*100:.1f}%;"></div></div>'
             f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-top:4px;">Diferencial Esperado: <strong style="color:#F8FAFC;">{home_abbr} {-res["proj_spread_home"]:+.1f} pts</strong></div></div>',
             unsafe_allow_html=True,
         )
     with f1_c2:
         st.markdown(
-            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>⚡ SPREAD / HÁNDICAP DINÁMICO</span><span style="color:#38BDF8;">LÍNEA: {home_abbr} {res["spread_line_home"]:+.1f}</span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} ({res["spread_line_away"]:+.1f})</span><span><span class="sim-prob-val" style="color:#38BDF8;">{res["away_cover_prob"]*100:.1f}%</span><span class="sim-odds-badge">{res["away_sp_dec"]} / {res["away_sp_amer"]}</span></span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} ({res["spread_line_home"]:+.1f})</span><span><span class="sim-prob-val" style="color:#38BDF8;">{res["home_cover_prob"]*100:.1f}%</span><span class="sim-odds-badge">{res["home_sp_dec"]} / {res["home_sp_amer"]}</span></span></div>'
+            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>⚡ SPREAD / HÁNDICAP</span><span style="color:#38BDF8;">MKT: {home_abbr} {res["spread_line_home"]:+.1f}</span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} ({res["spread_line_away"]:+.1f})</span><span><span class="sim-prob-val" style="color:#38BDF8;">{res["away_cover_prob"]*100:.1f}%</span><span class="sim-odds-badge">Mkt {res["cuota_spread_away_decimal"]:.2f} | Fair {res["away_sp_dec"]}</span></span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} ({res["spread_line_home"]:+.1f})</span><span><span class="sim-prob-val" style="color:#38BDF8;">{res["home_cover_prob"]*100:.1f}%</span><span class="sim-odds-badge">Mkt {res["cuota_spread_home_decimal"]:.2f} | Fair {res["home_sp_dec"]}</span></span></div>'
             f'<div class="quant-bar-track"><div class="quant-bar-fill-left" style="width: {res["away_cover_prob"]*100:.1f}%;"></div><div class="quant-bar-fill-right" style="width: {res["home_cover_prob"]*100:.1f}%;"></div></div>'
-            f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-top:4px;">Edge vs Línea: <strong style="color:#00F5D4;">{abs(res["proj_spread_home"] - res["spread_line_home"]):.1f} pts de valor</strong></div></div>',
+            f'{_construir_badge_spread_html(res["valor_spread"])}</div>',
             unsafe_allow_html=True,
         )
     with f1_c3:
         st.markdown(
-            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>🎯 PUNTOS TOTALES (O/U)</span><span style="color:#F59E0B;">LÍNEA: {res["total_line"]:.1f} PTS</span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">OVER {res["total_line"]:.1f}</span><span><span class="sim-prob-val" style="color:#F59E0B;">{res["over_prob"]*100:.1f}%</span><span class="sim-odds-badge">{res["over_dec"]} / {res["over_amer"]}</span></span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">UNDER {res["total_line"]:.1f}</span><span><span class="sim-prob-val" style="color:#F59E0B;">{res["under_prob"]*100:.1f}%</span><span class="sim-odds-badge">{res["under_dec"]} / {res["under_amer"]}</span></span></div>'
+            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>🎯 PUNTOS TOTALES (O/U)</span><span style="color:#F59E0B;">MKT: {res["total_line"]:.1f} PTS</span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">OVER {res["total_line"]:.1f}</span><span><span class="sim-prob-val" style="color:#F59E0B;">{res["over_prob"]*100:.1f}%</span><span class="sim-odds-badge">Mkt {res["cuota_over_decimal"]:.2f} | Fair {res["over_dec"]}</span></span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">UNDER {res["total_line"]:.1f}</span><span><span class="sim-prob-val" style="color:#F59E0B;">{res["under_prob"]*100:.1f}%</span><span class="sim-odds-badge">Mkt {res["cuota_under_decimal"]:.2f} | Fair {res["under_dec"]}</span></span></div>'
             f'<div class="quant-bar-track"><div class="quant-bar-fill-left" style="width: {res["over_prob"]*100:.1f}%;"></div><div class="quant-bar-fill-right" style="width: {res["under_prob"]*100:.1f}%;"></div></div>'
-            f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-top:4px;">Banda Sim (P10 / P50 / P90): <strong style="color:#F8FAFC;">{res["total_p10"]:.0f} / {res["total_p50"]:.0f} / {res["total_p90"]:.0f} pts</strong></div></div>',
+            f'{_construir_badge_totales_html(res["valor_totales"])}</div>',
             unsafe_allow_html=True,
         )
 
@@ -377,7 +506,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
         )
 
     st.markdown(
-        '<div class="row-label-bar" style="border-left-color: #8B5CF6;"><span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (SINCRONIZADO CON QUINTETOS Y MINUTOS ESPERADOS)</span>'
+        '<div class="row-label-bar" style="border-left-color: #8B5CF6;"><span class="row-label-title">🏀 FILA 4 // PLAYER PROPS LEANS (CUOTAS JUSTAS DECIMALES)</span>'
         '<span class="row-label-sub">SIMULACIÓN INDIVIDUAL AJUSTADA POR ESTILO DE DEFENSA RIVAL (ISO / PNR)</span></div>',
         unsafe_allow_html=True,
     )
@@ -392,7 +521,7 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
                 f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.73rem; color:#94A3B8; margin-bottom:6px;">PPG Vigente: <strong>{prop["base_ppg"]:.1f}</strong> &rarr; Proy: <strong style="color:#F8FAFC;">{prop["proj_ppg"]:.1f} Pts</strong></div>'
                 f'<div style="background:rgba(5,8,17,0.72); border:1px solid rgba(148,163,184,0.16); border-radius:8px; padding:7px 10px; margin-bottom:6px;">'
                 f'<div class="{lean_cls}">{prop["lean_side"]} {prop["prop_line"]:.1f} PTS ({prop["lean_prob"]*100:.1f}%)</div>'
-                f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.70rem; color:#CBD5E1; margin-top:2px;">Fair Odds: <strong>{prop["fair_dec"]} ({prop["fair_amer"]})</strong> | IQR: {prop["p25"]:.0f}-{prop["p75"]:.0f}</div></div>'
+                f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.70rem; color:#CBD5E1; margin-top:2px;">Fair Decimal: <strong>{prop["fair_dec"]}</strong> | IQR: {prop["p25"]:.0f}-{prop["p75"]:.0f}</div></div>'
                 f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.68rem; color:#94A3B8;">{prop["matchup_note"]}</div></div>',
                 unsafe_allow_html=True,
             )
@@ -410,6 +539,10 @@ def init_session_state() -> None:
         )
     if "calendario_nba" not in st.session_state:
         st.session_state.calendario_nba = obtener_calendario_nba_hoy()
+    if "lineas_mercado_nba" not in st.session_state:
+        st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=None)
+    if "last_odds_api_key" not in st.session_state:
+        st.session_state.last_odds_api_key = ""
     if "modo_manual_respaldo" not in st.session_state:
         st.session_state.modo_manual_respaldo = False
     if "lineup_editor_version" not in st.session_state:
@@ -600,7 +733,7 @@ def main() -> None:
 
     st.sidebar.markdown(
         '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
-        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v10.1</div>',
+        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v11.0 (DECIMAL +EV)</div>',
         unsafe_allow_html=True,
     )
 
@@ -632,13 +765,11 @@ def main() -> None:
             content_hash = hashlib.md5(raw_bytes).hexdigest()
             excel_signature = f"{archivo_subido.name}_{len(raw_bytes)}_{content_hash}"
 
-            # 1. RECARGA INMEDIATA TRAS LA SUBIDA (con bandera anti-bucle infinito)
             if st.session_state.get("excel_procesado_sig") != excel_signature:
                 try:
                     df_subido = pd.read_excel(io.BytesIO(raw_bytes))
                     lineups_actualizados = parsear_excel_a_lineups(df_subido, strict_240=False)
 
-                    # Guardar en st.session_state.lineups_nba y sincronizar st.session_state.df_nba
                     st.session_state.lineups_nba = lineups_actualizados
                     st.session_state.df_nba = sincronizar_df_nba_con_lineups(
                         st.session_state.df_nba, lineups_actualizados
@@ -659,7 +790,6 @@ def main() -> None:
                 st.session_state.excel_cargado_ok = False
                 st.session_state.df_excel_preview = None
 
-    # 3. FEEDBACK VISUAL EN LA BARRA LATERAL Y VISTA PREVIA DE CONFIRMACIÓN
     if st.session_state.get("excel_cargado_ok") and st.session_state.get("df_excel_preview") is not None:
         st.sidebar.success("✅ Roster cargado desde Excel exitosamente")
         st.sidebar.caption("🔍 Vista previa en memoria (`st.session_state.lineups_nba`):")
@@ -670,17 +800,29 @@ def main() -> None:
             height=180,
         )
 
+    # ==========================================================================
+    # SERVIDOR DE MOMIOS EN VIVO (THE ODDS API + ESPN CONSENSUS FALLBACK DECIMAL)
+    # ==========================================================================
+    st.sidebar.markdown("### 💹 SERVIDOR DE MOMIOS (DECIMAL)")
+    api_key = st.sidebar.text_input("Odds API Key (Opcional)", type="password")
+    if api_key != st.session_state.get("last_odds_api_key", ""):
+        st.session_state.last_odds_api_key = api_key
+        st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=api_key)
+
     with st.sidebar:
-        st.markdown("### 🗓️ CARTELERA EN VIVO (ESPN API)")
-        if st.button("🔄 Actualizar Calendario de Hoy", use_container_width=True):
-            with st.spinner("Consultando calendario oficial del día desde ESPN Scoreboard API..."):
+        if st.button("🔄 Sincronizar Momios y Calendario", use_container_width=True):
+            with st.spinner("Auditando líneas en formato decimal (The Odds API / ESPN Scoreboard)..."):
                 st.session_state.calendario_nba = obtener_calendario_nba_hoy()
+                st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=api_key)
                 st.session_state.nba_partido_activo = None
                 if st.session_state.calendario_nba:
                     st.session_state.modo_manual_respaldo = False
-                    st.success(f"Calendario actualizado: {len(st.session_state.calendario_nba)} partido(s) hoy.")
+                    st.success(
+                        f"Cartelera sincronizada: {len(st.session_state.calendario_nba)} partido(s) | "
+                        f"{len(st.session_state.lineas_mercado_nba)} línea(s) en decimal."
+                    )
                 else:
-                    st.info("No se encontraron partidos programados hoy en ESPN. Respaldo manual activo.")
+                    st.info("Sin juegos programados hoy en ESPN. Operando con selector manual y consenso decimal.")
 
         if st.session_state.calendario_nba:
             st.checkbox(
@@ -689,7 +831,6 @@ def main() -> None:
                 help="Activa esta casilla si deseas simular cruces personalizados en lugar del calendario oficial de hoy.",
             )
 
-        st.markdown("---")
         st.markdown("### 🌐 TELEMETRÍA NBA.COM API")
         if st.button("🔄 Forzar Sincronización con NBA.com", use_container_width=True):
             st.cache_data.clear()
@@ -716,19 +857,20 @@ def main() -> None:
                 st.session_state.nba_partido_activo = None
                 st.rerun()
 
-        st.markdown("---")
         st.markdown("### ⚙️ PARÁMETROS DEL MOTOR")
         n_sims = st.select_slider("Iteraciones Monte Carlo / Partido", options=[1000, 2500, 5000, 10000, 20000], value=5000)
         hfa_pts = st.slider("Factor de Localía (HFA Puntos)", min_value=0.0, max_value=5.0, value=2.5, step=0.1)
+        umbral_ev_pts = st.slider("Umbral Mínimo de Valor (+EV Pts)", min_value=1.0, max_value=6.0, value=3.0, step=0.5)
         base_seed = st.number_input("Semilla Cuantitativa (RNG Seed)", min_value=1, max_value=999999, value=2026, step=1)
 
-        st.markdown("---")
         st.caption(f"🗓️ Partidos ESPN Hoy: {len(st.session_state.calendario_nba)}")
+        st.caption(f"💹 Líneas Mercado Activas: {len(st.session_state.get('lineas_mercado_nba', {}))}")
         st.caption(f"📂 Fuente Ratings: {st.session_state.get('data_source_label', 'Respaldo Local')}")
 
     df_teams = st.session_state.df_nba
     team_list = df_teams["Team"].tolist()
     calendario_hoy = st.session_state.calendario_nba
+    lineas_mercado_dict: Dict[str, Dict[str, Any]] = st.session_state.get("lineas_mercado_nba", {})
 
     espn_matchups_validos: List[Tuple[str, str]] = []
     espn_meta_validos: List[Dict] = []
@@ -744,21 +886,21 @@ def main() -> None:
 
     usar_espn_en_vivo = bool(espn_matchups_validos) and not st.session_state.get("modo_manual_respaldo", False)
     active_games_count = len(espn_matchups_validos) if usar_espn_en_vivo else int(st.session_state.get("num_games", 6))
-    slate_mode_badge = f"ESPN SCOREBOARD LIVE ({len(espn_matchups_validos)} JUEGOS HOY)" if usar_espn_en_vivo else "SELECTOR MANUAL DE RESPALDO"
+    odds_provider_badge = "THE ODDS API (DECIMAL)" if api_key else "ESPN CONSENSUS FALLBACK (DECIMAL)"
 
     st.markdown(
         f"""
         <div class="tv-master-header">
             <div class="tv-top-bar">
-                <div class="syndicate-badge"><span class="pulse-dot"></span> SHARP SYNDICATE // {slate_mode_badge}</div>
+                <div class="syndicate-badge"><span class="pulse-dot"></span> SHARP SYNDICATE // {odds_provider_badge}</div>
                 <div class="font-mono" style="font-size:0.76rem; color:#94A3B8;">
-                    CALENDARIO: <strong style="color:#00F5D4;">ESPN SITE API v2</strong> &nbsp;|&nbsp;
+                    FORMATO CUOTAS: <strong style="color:#00F5D4;">DECIMAL ESTRICTO</strong> &nbsp;|&nbsp;
                     SIMULATIONS: <strong style="color:#F8FAFC;">{n_sims:,} / GAME</strong> &nbsp;|&nbsp;
-                    HFA: <strong style="color:#38BDF8;">+{hfa_pts:.1f} PTS</strong>
+                    UMBRAL +EV: <strong style="color:#38BDF8;">&ge;{umbral_ev_pts:.1f} PTS</strong>
                 </div>
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
-            <div class="tv-subtitle">Arquitectura modular limpia (<code>styles.py</code>, <code>sync_espn.py</code>, <code>engine_nba.py</code>, <code>app.py</code>) con sincronización reactiva de Excel en <code>st.session_state.lineups_nba</code> y motor Monte Carlo de 5,000 posesiones.</div>
+            <div class="tv-subtitle">Auditoría de líneas de mercado (The Odds API + ESPN Scoreboard Fallback) frente a 5,000 posesiones Monte Carlo con detección automática de valor (+EV) en Totales y Hándicap en formato decimal.</div>
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">CARTELERA HOY: <strong>{active_games_count} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{active_games_count * n_sims:,}</strong></div>
@@ -809,13 +951,17 @@ def main() -> None:
             st.info("Selecciona al menos un partido válido para visualizar la Cartelera NBA.")
             return
 
-        # 2. CONSUMO ESTRICTO DE st.session_state.lineups_nba EN LA CUADRÍCULA Y RADAR
         sim_results: List[Dict] = []
         for idx, (away_name, home_name) in enumerate(selected_matchups):
             away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
             home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
             away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
+            matchup_key = f"{away_abbr}@{home_abbr}"
+
             c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(idx, (None, None))
+            mkt_odds_info = lineas_mercado_dict.get(matchup_key)
+            if mkt_odds_info is None and slate_meta and idx < len(slate_meta):
+                mkt_odds_info = slate_meta[idx]
 
             away_lu_session = obtener_lineup_en_sesion(away_abbr)
             home_lu_session = obtener_lineup_en_sesion(home_abbr)
@@ -829,16 +975,17 @@ def main() -> None:
                 hfa_pts=hfa_pts,
                 custom_spread_home=c_sp,
                 custom_total_line=c_tot,
+                market_odds_info=mkt_odds_info,
+                umbral_ev_pts=umbral_ev_pts,
                 seed=int(base_seed) + idx * 101,
             )
             sim_results.append(res)
 
         radar_picks = extract_executive_radar(sim_results)
         render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
-        render_slate_grid_3x3(sim_results, slate_meta=slate_meta)
+        render_slate_grid_3x3(sim_results, slate_meta=slate_meta, umbral_ev_pts=umbral_ev_pts)
 
     else:
-        # 2. CONSUMO ESTRICTO DE st.session_state.lineups_nba EN LA VISTA B (DETALLE)
         active_info = st.session_state.nba_partido_activo
         game_idx = int(active_info.get("idx", 0))
         away_name, home_name = str(active_info["away_team"]), str(active_info["home_team"])
@@ -871,7 +1018,9 @@ def main() -> None:
         away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
         home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
         away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
+        matchup_key = f"{away_abbr}@{home_abbr}"
         c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(game_idx, (None, None))
+        mkt_odds_info = lineas_mercado_dict.get(matchup_key)
 
         away_lu_session = obtener_lineup_en_sesion(away_abbr)
         home_lu_session = obtener_lineup_en_sesion(home_abbr)
@@ -885,6 +1034,8 @@ def main() -> None:
             hfa_pts=hfa_pts,
             custom_spread_home=c_sp,
             custom_total_line=c_tot,
+            market_odds_info=mkt_odds_info,
+            umbral_ev_pts=umbral_ev_pts,
             seed=int(base_seed) + game_idx * 101,
         )
 

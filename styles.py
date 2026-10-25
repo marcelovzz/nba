@@ -30,7 +30,7 @@ TEAM_RECENT_FORM: Dict[str, List[str]] = {
 
 
 def inject_cyber_quant_css() -> None:
-    """Inyecta la hoja de estilos Cyber-Quant UI (Glassmorphism, Orbitron, JetBrains Mono, Scoreboard TV)."""
+    """Inyecta la hoja de estilos Cyber-Quant UI (Glassmorphism, Orbitron, JetBrains Mono, Scoreboard TV y Badges +EV)."""
     st.markdown(
         """
         <style>
@@ -150,22 +150,44 @@ def inject_cyber_quant_css() -> None:
             backdrop-filter: blur(16px); transition: transform 0.18s ease, border-color 0.18s ease;
         }
         .grid-game-card:hover { border-color: rgba(0, 245, 212, 0.55); box-shadow: 0 12px 34px rgba(0, 245, 212, 0.12); }
-        .grid-card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
-        .grid-league-badge { font-family: 'Orbitron', sans-serif; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.08em; color: #00F5D4; background: rgba(0, 245, 212, 0.10); border: 1px solid rgba(0, 245, 212, 0.30); padding: 3px 9px; border-radius: 999px; }
-        .grid-time-badge { font-family: 'JetBrains Mono', monospace; font-size: 0.71rem; color: #94A3B8; font-weight: 600; }
-        .grid-team-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; margin-bottom: 6px; background: rgba(5, 8, 17, 0.60); border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 10px; }
+        .grid-card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+        .grid-league-badge { font-family: 'Orbitron', sans-serif; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.08em; color: #00F5D4; background: rgba(0, 245, 212, 0.10); border: 1px solid rgba(0, 245, 212, 0.30); padding: 3px 9px; border-radius: 999px; }
+        .grid-time-badge { font-family: 'JetBrains Mono', monospace; font-size: 0.70rem; color: #94A3B8; font-weight: 600; }
+        .grid-team-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; margin-bottom: 6px; background: rgba(5, 8, 17, 0.65); border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 10px; }
         .grid-team-info { display: flex; align-items: center; gap: 4px; }
-        .grid-team-abbr { font-family: 'Orbitron', sans-serif; font-size: 0.92rem; font-weight: 800; color: #F8FAFC; margin-right: 6px; }
-        .grid-team-fullname { font-family: 'Inter', sans-serif; font-size: 0.78rem; color: #94A3B8; font-weight: 500; }
+        .grid-team-abbr { font-family: 'Orbitron', sans-serif; font-size: 0.94rem; font-weight: 800; color: #F8FAFC; margin-right: 6px; }
+        .grid-team-fullname { font-family: 'Inter', sans-serif; font-size: 0.75rem; color: #94A3B8; font-weight: 500; }
+        .grid-proj-pts { font-family: 'JetBrains Mono', monospace; font-size: 1.05rem; font-weight: 800; color: #00F5D4; margin-left: 8px; }
         .form-pills-wrap { display: flex; align-items: center; gap: 3px; }
         .form-pill-w { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; font-weight: 800; color: #050811; background: #10B981; padding: 1px 5px; border-radius: 4px; }
         .form-pill-l { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; font-weight: 800; color: #F8FAFC; background: rgba(244, 63, 94, 0.78); padding: 1px 5px; border-radius: 4px; }
+
+        .audit-market-box {
+            margin-top: 8px; padding: 9px 11px;
+            background: rgba(5, 8, 17, 0.78);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 10px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .audit-market-row {
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 0.73rem; color: #CBD5E1; margin-bottom: 5px;
+        }
+        .audit-market-label { color: #94A3B8; font-weight: 600; }
+        .audit-market-val { color: #F8FAFC; font-weight: 700; }
+        .ev-badge-pill {
+            display: block; width: 100%; text-align: center;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 800;
+            padding: 5px 8px; border-radius: 7px; letter-spacing: 0.02em;
+            margin-top: 3px;
+        }
+
         .grid-quick-forecast {
-            margin-top: 10px; padding: 9px 12px;
+            margin-top: 8px; padding: 8px 11px;
             background: linear-gradient(90deg, rgba(0, 245, 212, 0.08) 0%, rgba(56, 189, 248, 0.08) 100%);
             border: 1px solid rgba(56, 189, 248, 0.28); border-radius: 10px;
             display: flex; justify-content: space-between; align-items: center;
-            font-family: 'JetBrains Mono', monospace; font-size: 0.76rem;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.74rem;
         }
         .grid-forecast-lines { color: #F8FAFC; font-weight: 800; }
         .grid-forecast-win { color: #00F5D4; font-weight: 700; font-size: 0.72rem; }

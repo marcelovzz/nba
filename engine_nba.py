@@ -1,7 +1,9 @@
 import io
-from typing import Dict, List, Optional, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+
 try:
     import streamlit as st
 except ImportError:
@@ -13,6 +15,10 @@ LEAGUE_AVG_PACE = 99.0
 LEAGUE_AVG_ISO_PPP = 1.03
 LEAGUE_AVG_PNR_PPP = 1.04
 LEAGUE_AVG_TOV = 13.1
+
+# Desviaciones estándar empíricas de simulaciones Monte Carlo NBA (5,000 posesiones)
+NBA_TOTAL_SIM_STD = 13.6
+NBA_MARGIN_SIM_STD = 11.8
 
 GAME_SLATE_TIMES: List[str] = [
     "19:00 ET", "19:30 ET", "19:30 ET", "20:00 ET", "20:00 ET",
@@ -113,17 +119,20 @@ QUINTETOS_BASE = DEFAULT_LINEUPS_30_TEAMS
 DEFAULT_TEAM_META_BY_ABBR: Dict[str, Dict] = {d["Team_Abbr"]: d for d in DEFAULT_CSV_DATA}
 
 
+def _normal_cdf(x: float) -> float:
+    """Función de distribución acumulada normal estándar Φ(x) exacta vía math.erf."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
 def prob_to_fair_odds(prob: float) -> Tuple[str, str]:
-    """Convierte una probabilidad (0-1) a cuota justa Decimal y Americana."""
+    """
+    Convierte una probabilidad (0-1) a cuota justa estrictamente en FORMATO DECIMAL
+    (ej. '1.91', '2.15'). Retorna tupla (dec_str, dec_str) por compatibilidad modular.
+    """
     p = float(np.clip(prob, 0.01, 0.99))
     dec_odds = 1.0 / p
-    if p >= 0.5:
-        amer = -int(round((p / (1.0 - p)) * 100))
-        amer_str = f"{amer}"
-    else:
-        amer = int(round(((1.0 - p) / p) * 100))
-        amer_str = f"+{amer}"
-    return f"{dec_odds:.2f}", amer_str
+    dec_str = f"{dec_odds:.2f}"
+    return dec_str, dec_str
 
 
 def round_to_half_point(val: float) -> float:
@@ -161,6 +170,177 @@ def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str
             return sub
 
     return pd.DataFrame(DEFAULT_LINEUPS_30_TEAMS[abbr])[LINEUP_COLS].copy()
+
+
+# ==============================================================================
+# DETECTORES DE VALOR CUANTITATIVO (+EV EN FORMATO DECIMAL)
+# ==============================================================================
+def evaluar_valor_totales_nba(
+    total_modelo: float,
+    total_mercado: float,
+    cuota_over: float,
+    cuota_under: float,
+    umbral_pts: float = 3.0,
+    prob_over_sim: Optional[float] = None,
+    prob_under_sim: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Auditoría matemática de Totales (Over/Under) en formato estrictamente DECIMAL:
+    - Calcula la discrepancia: `edge_pts = total_modelo - total_mercado`
+    - Si `edge_pts >= umbral_pts`:
+      * Calcula probabilidad estimada del Over desde la distribución de Monte Carlo y su EV%:
+        `ev_pct = round(((prob_over * cuota_over) - 1.0) * 100, 1)`
+      * Retorna: `{'pick': 'OVER', 'linea': total_mercado, 'cuota': cuota_over, 'edge_pts': round(edge_pts, 1), 'ev_pct': ev_pct, 'badge_color': '#00ff88', 'valor': True}`
+    - Si `edge_pts <= -umbral_pts`:
+      * Calcula probabilidad del Under y su EV%:
+        `ev_pct = round(((prob_under * cuota_under) - 1.0) * 100, 1)`
+      * Retorna: `{'pick': 'UNDER', 'linea': total_mercado, 'cuota': cuota_under, 'edge_pts': round(abs(edge_pts), 1), 'ev_pct': ev_pct, 'badge_color': '#ff3366', 'valor': True}`
+    - Si la diferencia está dentro del margen:
+      * Retorna: `{'pick': 'LÍNEA EFICIENTE', 'valor': False, 'badge_color': '#555555'}`
+    """
+    t_mod = float(total_modelo)
+    t_mkt = round(float(total_mercado), 1)
+    c_over = round(float(cuota_over), 2)
+    c_under = round(float(cuota_under), 2)
+    edge_pts = t_mod - t_mkt
+
+    # Probabilidad estimada de cubrir el Over/Under desde la distribución de Monte Carlo
+    if prob_over_sim is not None and 0.01 < float(prob_over_sim) < 0.99:
+        prob_over = float(prob_over_sim)
+    else:
+        prob_over = float(np.clip(_normal_cdf(edge_pts / NBA_TOTAL_SIM_STD), 0.05, 0.95))
+
+    if prob_under_sim is not None and 0.01 < float(prob_under_sim) < 0.99:
+        prob_under = float(prob_under_sim)
+    else:
+        prob_under = float(np.clip(1.0 - prob_over, 0.05, 0.95))
+
+    if edge_pts >= float(umbral_pts):
+        ev_pct = round(((prob_over * c_over) - 1.0) * 100.0, 1)
+        return {
+            "pick": "OVER",
+            "linea": t_mkt,
+            "cuota": c_over,
+            "edge_pts": round(edge_pts, 1),
+            "ev_pct": ev_pct,
+            "prob": round(prob_over * 100.0, 1),
+            "badge_color": "#00ff88",
+            "valor": True,
+        }
+
+    if edge_pts <= -float(umbral_pts):
+        ev_pct = round(((prob_under * c_under) - 1.0) * 100.0, 1)
+        return {
+            "pick": "UNDER",
+            "linea": t_mkt,
+            "cuota": c_under,
+            "edge_pts": round(abs(edge_pts), 1),
+            "ev_pct": ev_pct,
+            "prob": round(prob_under * 100.0, 1),
+            "badge_color": "#ff3366",
+            "valor": True,
+        }
+
+    return {
+        "pick": "LÍNEA EFICIENTE",
+        "linea": t_mkt,
+        "cuota": c_over,
+        "edge_pts": round(abs(edge_pts), 1),
+        "ev_pct": 0.0,
+        "prob": round(max(prob_over, prob_under) * 100.0, 1),
+        "badge_color": "#555555",
+        "valor": False,
+    }
+
+
+def evaluar_valor_spread_nba(
+    spread_modelo: float,
+    spread_mercado_home: float,
+    cuota_home: float,
+    cuota_away: float,
+    umbral_pts: float = 3.0,
+    home_abbr: str = "HOME",
+    away_abbr: str = "AWAY",
+    prob_home_cover_sim: Optional[float] = None,
+    prob_away_cover_sim: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Auditoría matemática de Hándicap / Spread en formato estrictamente DECIMAL:
+    Convención estándar de apuestas:
+      - `spread_mercado_home`: línea de hándicap del equipo local (ej. -6.5 si el local es favorito por 6.5 pts,
+        o +3.5 si el local es no-favorito).
+      - `spread_modelo`: hándicap justo proyectado por el modelo para el local (`proj_spread_home = -(pts_home - pts_away)`).
+      - Diferencial de ventaja para el Local (`edge_home_pts`): `spread_mercado_home - spread_modelo`.
+        * Si `edge_home_pts >= umbral_pts`, el modelo proyecta que el Local cubrirá la línea con ventaja de `edge_home_pts`.
+        * Si `edge_home_pts <= -umbral_pts`, la ventaja matemática favorece a la Visita (`AWAY`) por `abs(edge_home_pts)` pts.
+    """
+    sp_mod = float(spread_modelo)
+    sp_mkt_home = round(float(spread_mercado_home), 1)
+    sp_mkt_away = round(-sp_mkt_home, 1)
+    c_home = round(float(cuota_home), 2)
+    c_away = round(float(cuota_away), 2)
+
+    # Ventaja en puntos a favor del Local respecto a la línea del mercado
+    edge_home_pts = sp_mkt_home - sp_mod
+    edge_away_pts = -edge_home_pts
+
+    if prob_home_cover_sim is not None and 0.01 < float(prob_home_cover_sim) < 0.99:
+        prob_home_cover = float(prob_home_cover_sim)
+    else:
+        prob_home_cover = float(np.clip(_normal_cdf(edge_home_pts / NBA_MARGIN_SIM_STD), 0.05, 0.95))
+
+    if prob_away_cover_sim is not None and 0.01 < float(prob_away_cover_sim) < 0.99:
+        prob_away_cover = float(prob_away_cover_sim)
+    else:
+        prob_away_cover = float(np.clip(1.0 - prob_home_cover, 0.05, 0.95))
+
+    if edge_home_pts >= float(umbral_pts):
+        ev_pct = round(((prob_home_cover * c_home) - 1.0) * 100.0, 1)
+        linea_str = f"{sp_mkt_home:+.1f}"
+        return {
+            "pick": f"{home_abbr} {linea_str}",
+            "lado": "HOME",
+            "franquicia": home_abbr,
+            "linea": sp_mkt_home,
+            "linea_str": linea_str,
+            "cuota": c_home,
+            "edge_pts": round(edge_home_pts, 1),
+            "ev_pct": ev_pct,
+            "prob": round(prob_home_cover * 100.0, 1),
+            "badge_color": "#00e5ff",
+            "valor": True,
+        }
+
+    if edge_away_pts >= float(umbral_pts):
+        ev_pct = round(((prob_away_cover * c_away) - 1.0) * 100.0, 1)
+        linea_str = f"{sp_mkt_away:+.1f}"
+        return {
+            "pick": f"{away_abbr} {linea_str}",
+            "lado": "AWAY",
+            "franquicia": away_abbr,
+            "linea": sp_mkt_away,
+            "linea_str": linea_str,
+            "cuota": c_away,
+            "edge_pts": round(edge_away_pts, 1),
+            "ev_pct": ev_pct,
+            "prob": round(prob_away_cover * 100.0, 1),
+            "badge_color": "#00e5ff",
+            "valor": True,
+        }
+
+    return {
+        "pick": "SPREAD EFICIENTE",
+        "lado": "NEUTRAL",
+        "franquicia": home_abbr,
+        "linea": sp_mkt_home,
+        "linea_str": f"{sp_mkt_home:+.1f}",
+        "cuota": c_home,
+        "edge_pts": round(abs(edge_home_pts), 1),
+        "ev_pct": 0.0,
+        "prob": round(max(prob_home_cover, prob_away_cover) * 100.0, 1),
+        "badge_color": "#555555",
+        "valor": False,
+    }
 
 
 # ==============================================================================
@@ -271,9 +451,6 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
     Valida que el DataFrame cargado desde Excel (.xlsx) contenga las columnas requeridas
     ['Team_Abbr', 'Pos', 'Jugador', 'Minutos', 'O_EPM', 'D_EPM', 'Pace_Diff', 'Es_Estrella', 'PPG_Linea']
     y procesa los minutos de cada franquicia (240 min por equipo).
-    Si `strict_240=False` (modo interactivo en la app), si un usuario redujo minutos de un titular
-    por lesión sin ajustar manualmente la fila de Banca, el motor conserva los minutos para aplicar
-    el ajuste de reemplazo en `calcular_ratings_lineup` sin rechazar el archivo Excel.
     """
     if df_excel is None or not isinstance(df_excel, pd.DataFrame) or df_excel.empty:
         raise ValueError("El archivo Excel subido está vacío o no contiene una tabla válida.")
@@ -488,7 +665,6 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
         p_oepm = float(st_row["O_EPM"])
         excel_line = float(st_row.get("PPG_Linea", 0.0)) if "PPG_Linea" in st_row and pd.notna(st_row["PPG_Linea"]) else 0.0
 
-        # Verificar si coincide con Star1 o Star2 original de la franquicia
         orig_s1 = str(default_meta.get("Star1_Name", "")).strip()
         orig_s2 = str(default_meta.get("Star2_Name", "")).strip()
         def_row = default_lu.get(p_name.lower(), {})
@@ -509,10 +685,8 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
         epm_changed = abs(p_oepm - def_oepm) > 0.05
         line_changed = excel_line > 0.0 and abs(excel_line - orig_line) > 0.1
 
-        # Escalar PPG proyectado por minutos y O_EPM editados en Excel
         proj_ppg = orig_ppg * (p_mins / max(def_mins, 1.0)) + (p_oepm - def_oepm) * 1.15
         if line_changed and not mins_changed and not epm_changed:
-            # Si el usuario modificó únicamente PPG_Linea en el Excel
             prop_line = round_to_half_point(excel_line)
         elif excel_line > 0.0:
             prop_line = round_to_half_point(excel_line)
@@ -521,7 +695,6 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
 
         return p_name, round(max(4.0, proj_ppg), 1), prop_line
 
-    # Seleccionar los 2 jugadores estrella activos (Minutos > 0.5) priorizando Es_Estrella=True
     active_starters = starters_df[starters_df["Minutos_Esperados"] > 0.5].copy()
     if active_starters.empty:
         active_starters = starters_df.copy()
@@ -591,7 +764,7 @@ def simulate_player_prop(
     opp_def_rtg: float,
     poss_sim: np.ndarray,
 ) -> Dict:
-    """Motor de varianza para Player Props ajustado por el ritmo y la defensa rival."""
+    """Motor de varianza para Player Props ajustado por el ritmo y la defensa rival (Cuotas Decimales)."""
     n_sims = len(poss_sim)
     pace_factor = exp_pace / max(team_pace, 85.0)
 
@@ -614,7 +787,7 @@ def simulate_player_prop(
     lean_side = "OVER" if prob_over >= prob_under else "UNDER"
     lean_prob = prob_over if prob_over >= prob_under else prob_under
 
-    dec_odds, amer_odds = prob_to_fair_odds(lean_prob)
+    dec_odds, _ = prob_to_fair_odds(lean_prob)
     style_label = "Iso_PPP_Def" if style.upper() == "ISO" else "PnR_PPP_Def"
 
     return {
@@ -630,7 +803,7 @@ def simulate_player_prop(
         "lean_side": lean_side,
         "lean_prob": lean_prob,
         "fair_dec": dec_odds,
-        "fair_amer": amer_odds,
+        "fair_amer": dec_odds,
         "edge_pts": float(adjusted_ppg - prop_line),
         "p25": float(np.percentile(sim_pts, 25)),
         "p75": float(np.percentile(sim_pts, 75)),
@@ -647,11 +820,14 @@ def run_monte_carlo_matchup(
     hfa_pts: float = 2.5,
     custom_spread_home: Optional[float] = None,
     custom_total_line: Optional[float] = None,
+    market_odds_info: Optional[Dict[str, Any]] = None,
+    umbral_ev_pts: float = 3.0,
     seed: int = 42,
 ) -> Dict:
     """
     Integra el Motor de Cálculo Ascendente (`calcular_ratings_lineup`) leyendo obligatoriamente
-    los quintetos en sesión (`st.session_state.lineups_nba`) antes de lanzar las 5,000 simulaciones.
+    los quintetos en sesión (`st.session_state.lineups_nba`), ejecuta 5,000 simulaciones de Monte Carlo
+    y audita las líneas de las casas de apuestas en FORMATO DECIMAL (`evaluar_valor_totales_nba` y `evaluar_valor_spread_nba`).
     """
     away_abbr = str(away_row_raw["Team_Abbr"]).strip().upper()
     home_abbr = str(home_row_raw["Team_Abbr"]).strip().upper()
@@ -678,8 +854,8 @@ def run_monte_carlo_matchup(
     static_pace = (float(away_row["Base_Pace"]) + float(home_row["Base_Pace"])) / 2.0
     mkt_away_pts = (static_pace / 100.0) * static_away_ortg - (hfa_pts / 2.0)
     mkt_home_pts = (static_pace / 100.0) * static_home_ortg + (hfa_pts / 2.0)
-    default_market_spread_home = np.floor(-(mkt_home_pts - mkt_away_pts)) + 0.5
-    default_market_total = np.floor(mkt_home_pts + mkt_away_pts) + 0.5
+    default_market_spread_home = float(np.floor(-(mkt_home_pts - mkt_away_pts)) + 0.5)
+    default_market_total = float(np.floor(mkt_home_pts + mkt_away_pts) + 0.5)
 
     away_iso_delta = float(away_row["Iso_PPP_Off"]) - float(home_row["Iso_PPP_Def"])
     away_pnr_delta = float(away_row["PnR_PPP_Off"]) - float(home_row["PnR_PPP_Def"])
@@ -695,9 +871,32 @@ def run_monte_carlo_matchup(
     away_adj_ortg = away_base_ortg + away_tactical_ortg_adj + away_tov_adj
     home_adj_ortg = home_base_ortg + home_tactical_ortg_adj + home_tov_adj
 
-    spread_line_home = float(custom_spread_home) if custom_spread_home is not None else float(default_market_spread_home)
+    # Resolver líneas y cuotas decimales del mercado (The Odds API -> ESPN Consensus -> Consenso Base)
+    mkt_info = market_odds_info or {}
+    mkt_spread_val = mkt_info.get("spread_mercado_home")
+    mkt_total_val = mkt_info.get("total_mercado")
+
+    if custom_spread_home is not None:
+        spread_line_home = float(custom_spread_home)
+    elif mkt_spread_val is not None:
+        spread_line_home = float(mkt_spread_val)
+    else:
+        spread_line_home = default_market_spread_home
+
+    if custom_total_line is not None:
+        total_line = float(custom_total_line)
+    elif mkt_total_val is not None:
+        total_line = float(mkt_total_val)
+    else:
+        total_line = default_market_total
+
     spread_line_away = -spread_line_home
-    total_line = float(custom_total_line) if custom_total_line is not None else float(default_market_total)
+
+    cuota_over_decimal = round(float(mkt_info.get("cuota_over_decimal", 1.91)), 2)
+    cuota_under_decimal = round(float(mkt_info.get("cuota_under_decimal", 1.91)), 2)
+    cuota_spread_home_decimal = round(float(mkt_info.get("cuota_spread_home_decimal", 1.91)), 2)
+    cuota_spread_away_decimal = round(float(mkt_info.get("cuota_spread_away_decimal", 1.91)), 2)
+    odds_source_label = str(mkt_info.get("fuente", "Consenso Sportsbook (Decimal)"))
 
     poss_sim = np.clip(rng.normal(loc=exp_possessions, scale=2.75, size=n_sims), 86.0, 114.0)
 
@@ -736,6 +935,12 @@ def run_monte_carlo_matchup(
 
     total_pts_sim = home_pts_sim + away_pts_sim
 
+    exp_away_pts = float(np.mean(away_pts_sim))
+    exp_home_pts = float(np.mean(home_pts_sim))
+    exp_margin_home = float(np.mean(margin_sim))
+    exp_total_pts = float(np.mean(total_pts_sim))
+    proj_spread_home = -exp_margin_home
+
     home_win_prob = float(np.mean(margin_sim > 0))
     away_win_prob = 1.0 - home_win_prob
     home_ml_dec, home_ml_amer = prob_to_fair_odds(home_win_prob)
@@ -750,6 +955,28 @@ def run_monte_carlo_matchup(
     under_prob = 1.0 - over_prob
     over_dec, over_amer = prob_to_fair_odds(over_prob)
     under_dec, under_amer = prob_to_fair_odds(under_prob)
+
+    # Ejecutar Detectores de Valor Cuantitativo (+EV en formato decimal)
+    valor_totales = evaluar_valor_totales_nba(
+        total_modelo=exp_total_pts,
+        total_mercado=total_line,
+        cuota_over=cuota_over_decimal,
+        cuota_under=cuota_under_decimal,
+        umbral_pts=umbral_ev_pts,
+        prob_over_sim=over_prob,
+        prob_under_sim=under_prob,
+    )
+    valor_spread = evaluar_valor_spread_nba(
+        spread_modelo=proj_spread_home,
+        spread_mercado_home=spread_line_home,
+        cuota_home=cuota_spread_home_decimal,
+        cuota_away=cuota_spread_away_decimal,
+        umbral_pts=umbral_ev_pts,
+        home_abbr=home_abbr,
+        away_abbr=away_abbr,
+        prob_home_cover_sim=home_cover_prob,
+        prob_away_cover_sim=away_cover_prob,
+    )
 
     fav_is_home = home_win_prob >= away_win_prob
     fav_abbr = home_abbr if fav_is_home else away_abbr
@@ -819,14 +1046,21 @@ def run_monte_carlo_matchup(
         "home_row": home_row,
         "n_sims": n_sims,
         "exp_possessions": exp_possessions,
-        "exp_away_pts": float(np.mean(away_pts_sim)),
-        "exp_home_pts": float(np.mean(home_pts_sim)),
-        "exp_margin_home": float(np.mean(margin_sim)),
-        "exp_total_pts": float(np.mean(total_pts_sim)),
-        "proj_spread_home": -float(np.mean(margin_sim)),
+        "exp_away_pts": exp_away_pts,
+        "exp_home_pts": exp_home_pts,
+        "exp_margin_home": exp_margin_home,
+        "exp_total_pts": exp_total_pts,
+        "proj_spread_home": proj_spread_home,
         "spread_line_home": spread_line_home,
         "spread_line_away": spread_line_away,
         "total_line": total_line,
+        "cuota_over_decimal": cuota_over_decimal,
+        "cuota_under_decimal": cuota_under_decimal,
+        "cuota_spread_home_decimal": cuota_spread_home_decimal,
+        "cuota_spread_away_decimal": cuota_spread_away_decimal,
+        "odds_source_label": odds_source_label,
+        "valor_totales": valor_totales,
+        "valor_spread": valor_spread,
         "away_win_prob": away_win_prob,
         "home_win_prob": home_win_prob,
         "away_ml_dec": away_ml_dec,
@@ -868,7 +1102,7 @@ def run_monte_carlo_matchup(
 
 
 def extract_executive_radar(sim_results: List[Dict]) -> Dict:
-    """Extrae los 4 Top Picks automáticos evaluando únicamente los partidos activos en la jornada."""
+    """Extrae los 4 Top Picks automáticos en formato estrictamente DECIMAL evaluando los partidos activos."""
     best_ml = None
     best_spread = None
     best_total = None
@@ -876,28 +1110,28 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
 
     for res in sim_results:
         ml_candidates = [
-            (res["home_team"], res["home_abbr"], res["home_win_prob"], res["home_ml_dec"], res["home_ml_amer"], f"vs {res['away_abbr']} (Local)", res["exp_home_pts"] - res["exp_away_pts"]),
-            (res["away_team"], res["away_abbr"], res["away_win_prob"], res["away_ml_dec"], res["away_ml_amer"], f"@ {res['home_abbr']} (Visita)", res["exp_away_pts"] - res["exp_home_pts"]),
+            (res["home_team"], res["home_abbr"], res["home_win_prob"], res["home_ml_dec"], f"vs {res['away_abbr']} (Local)", res["exp_home_pts"] - res["exp_away_pts"]),
+            (res["away_team"], res["away_abbr"], res["away_win_prob"], res["away_ml_dec"], f"@ {res['home_abbr']} (Visita)", res["exp_away_pts"] - res["exp_home_pts"]),
         ]
         for c in ml_candidates:
             if best_ml is None or c[2] > best_ml["prob"]:
-                best_ml = {"team": c[0], "abbr": c[1], "prob": c[2], "dec": c[3], "amer": c[4], "context": c[5], "proj_margin": c[6]}
+                best_ml = {"team": c[0], "abbr": c[1], "prob": c[2], "dec": c[3], "context": c[4], "proj_margin": c[5]}
 
         sp_candidates = [
-            (f"{res['home_team']} {res['spread_line_home']:+.1f}", res["home_abbr"], res["home_cover_prob"], res["home_sp_dec"], res["home_sp_amer"], f"{res['away_abbr']} @ {res['home_abbr']} | Margen Proy: {-res['proj_spread_home']:+.1f}"),
-            (f"{res['away_team']} {res['spread_line_away']:+.1f}", res["away_abbr"], res["away_cover_prob"], res["away_sp_dec"], res["away_sp_amer"], f"{res['away_abbr']} @ {res['home_abbr']} | Margen Proy: {res['proj_spread_home']:+.1f}"),
+            (f"{res['home_team']} {res['spread_line_home']:+.1f} @ {res['cuota_spread_home_decimal']:.2f}", res["home_abbr"], res["home_cover_prob"], res["home_sp_dec"], f"{res['away_abbr']} @ {res['home_abbr']} | Modelo: {res['proj_spread_home']:+.1f}"),
+            (f"{res['away_team']} {res['spread_line_away']:+.1f} @ {res['cuota_spread_away_decimal']:.2f}", res["away_abbr"], res["away_cover_prob"], res["away_sp_dec"], f"{res['away_abbr']} @ {res['home_abbr']} | Modelo: {-res['proj_spread_home']:+.1f}"),
         ]
         for c in sp_candidates:
             if best_spread is None or c[2] > best_spread["prob"]:
-                best_spread = {"pick": c[0], "abbr": c[1], "prob": c[2], "dec": c[3], "amer": c[4], "context": c[5]}
+                best_spread = {"pick": c[0], "abbr": c[1], "prob": c[2], "dec": c[3], "context": c[4]}
 
         tot_candidates = [
-            (f"OVER {res['total_line']:.1f} Pts", res["home_abbr"], res["over_prob"], res["over_dec"], res["over_amer"], f"{res['away_abbr']} @ {res['home_abbr']} | Total Proy: {res['exp_total_pts']:.1f}"),
-            (f"UNDER {res['total_line']:.1f} Pts", res["home_abbr"], res["under_prob"], res["under_dec"], res["under_amer"], f"{res['away_abbr']} @ {res['home_abbr']} | Total Proy: {res['exp_total_pts']:.1f}"),
+            (f"OVER {res['total_line']:.1f} @ {res['cuota_over_decimal']:.2f}", res["home_abbr"], res["over_prob"], res["over_dec"], f"{res['away_abbr']} @ {res['home_abbr']} | Modelo: {res['exp_total_pts']:.1f} pts"),
+            (f"UNDER {res['total_line']:.1f} @ {res['cuota_under_decimal']:.2f}", res["home_abbr"], res["under_prob"], res["under_dec"], f"{res['away_abbr']} @ {res['home_abbr']} | Modelo: {res['exp_total_pts']:.1f} pts"),
         ]
         for c in tot_candidates:
             if best_total is None or c[2] > best_total["prob"]:
-                best_total = {"pick": c[0], "abbr": c[1], "prob": c[2], "dec": c[3], "amer": c[4], "context": c[5]}
+                best_total = {"pick": c[0], "abbr": c[1], "prob": c[2], "dec": c[3], "context": c[4]}
 
         for prop in res["props"]:
             if best_prop is None or prop["lean_prob"] > best_prop["lean_prob"]:
