@@ -15,7 +15,9 @@ from styles import (
 from sync_espn import (
     NBA_SEASON_TARGET,
     escudo_nba_html,
+    formatear_fecha_larga_es,
     load_clean_nba_dataframe,
+    obtener_calendario_nba,
     obtener_calendario_nba_hoy,
     obtener_lineas_mercado_nba,
     sincronizar_datos_nba_api,
@@ -48,6 +50,101 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _sincronizar_jornada_por_fecha(fecha_obj: date, api_key: Optional[str] = None) -> None:
+    """
+    Actualiza `st.session_state.fecha_nba`, formatea la fecha a 'YYYYMMDD' y consulta
+    `obtener_calendario_nba(fecha_str)` y `obtener_lineas_mercado_nba` para ese día exacto.
+    """
+    st.session_state.fecha_nba = fecha_obj
+    fecha_str = fecha_obj.strftime("%Y%m%d")
+    st.session_state.fecha_nba_str = fecha_str
+    calendario_dia = obtener_calendario_nba(fecha_str=fecha_str)
+    st.session_state.calendario_nba = calendario_dia
+    st.session_state.calendario_auditoria_nba = calendario_dia
+    st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(
+        api_key=api_key,
+        fecha_yyyymmdd=fecha_str,
+    )
+    st.session_state.nba_partido_activo = None
+
+
+def render_date_navigation_bar(api_key: Optional[str] = None, location: str = "top") -> None:
+    """
+    Renderiza el selector de jornadas NBA día por día:
+      - Control `st.date_input` sincronizado con `st.session_state.fecha_nba`.
+      - Tres botones de acceso rápido: `[◀ Ayer]`, `[Hoy]`, `[Mañana ▶]` que actualizan
+        `st.session_state.fecha_nba`, consultan ESPN con formato 'YYYYMMDD' y ejecutan `st.rerun()`.
+    """
+    fecha_actual: date = st.session_state.get("fecha_nba", date.today())
+    hoy_sistema: date = date.today()
+    es_pasado = fecha_actual < hoy_sistema
+    es_hoy = fecha_actual == hoy_sistema
+    modo_jornada_badge = (
+        "📊 JORNADA FINALIZADA (LISTA PARA AUDITAR / CALIBRAR)"
+        if es_pasado
+        else ("🟢 JORNADA DE HOY (MOMIOS EN VIVO ACTIVOS)" if es_hoy else "⏭️ JORNADA FUTURA (MOMIOS ANTICIPADOS ACTIVOS)")
+    )
+
+    if location == "sidebar":
+        st.sidebar.markdown("### 📅 SELECTOR DE JORNADA NBA")
+        fecha_input_sb = st.sidebar.date_input(
+            "Selecciona el día de la temporada",
+            value=fecha_actual,
+            key="sidebar_date_input_nba",
+        )
+        if fecha_input_sb != fecha_actual:
+            _sincronizar_jornada_por_fecha(fecha_input_sb, api_key=api_key)
+            st.rerun()
+
+        b_col1, b_col2, b_col3 = st.sidebar.columns(3)
+        with b_col1:
+            if st.button("◀ Ayer", key="sb_btn_ayer", use_container_width=True):
+                _sincronizar_jornada_por_fecha(fecha_actual - timedelta(days=1), api_key=api_key)
+                st.rerun()
+        with b_col2:
+            if st.button("Hoy", key="sb_btn_hoy", use_container_width=True):
+                _sincronizar_jornada_por_fecha(date.today(), api_key=api_key)
+                st.rerun()
+        with b_col3:
+            if st.button("Mañana ▶", key="sb_btn_manana", use_container_width=True):
+                _sincronizar_jornada_por_fecha(fecha_actual + timedelta(days=1), api_key=api_key)
+                st.rerun()
+        st.sidebar.caption(f"📡 Query ESPN: `?dates={fecha_actual.strftime('%Y%m%d')}`")
+        return
+
+    # Barra superior de navegación de fecha en el tablero principal
+    nav_c1, nav_c2, nav_c3, nav_c4, nav_c5 = st.columns([1.8, 0.9, 0.9, 0.9, 2.3])
+    with nav_c1:
+        fecha_input_top = st.date_input(
+            "📅 Día de la Jornada NBA",
+            value=fecha_actual,
+            key="top_date_input_nba",
+            label_visibility="collapsed",
+        )
+        if fecha_input_top != fecha_actual:
+            _sincronizar_jornada_por_fecha(fecha_input_top, api_key=api_key)
+            st.rerun()
+    with nav_c2:
+        if st.button("◀ Ayer", key="top_btn_ayer", use_container_width=True):
+            _sincronizar_jornada_por_fecha(fecha_actual - timedelta(days=1), api_key=api_key)
+            st.rerun()
+    with nav_c3:
+        if st.button("Hoy", key="top_btn_hoy", use_container_width=True):
+            _sincronizar_jornada_por_fecha(date.today(), api_key=api_key)
+            st.rerun()
+    with nav_c4:
+        if st.button("Mañana ▶", key="top_btn_manana", use_container_width=True):
+            _sincronizar_jornada_por_fecha(fecha_actual + timedelta(days=1), api_key=api_key)
+            st.rerun()
+    with nav_c5:
+        st.markdown(
+            f'<div style="display:flex; align-items:center; justify-content:flex-end; height:38px;">'
+            f'<span class="section-banner-tag">{modo_jornada_badge} &bull; {fecha_actual.strftime("%Y%m%d")}</span>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
@@ -156,14 +253,20 @@ def render_slate_grid_3x3(
     sim_results: List[Dict],
     slate_meta: Optional[List[Dict]] = None,
     umbral_ev_pts: float = 3.0,
+    fecha_seleccionada: Optional[date] = None,
 ) -> None:
     """
     VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
     Renderiza para cada partido un contenedor Cyber-Quant con auditoría de Totales y Hándicap en formato decimal.
+    Si la fecha seleccionada es un día pasado (o el partido está marcado como finalizado), muestra además el marcador final real.
     """
+    fecha_ref = fecha_seleccionada or st.session_state.get("fecha_nba", date.today())
+    fecha_legible = formatear_fecha_larga_es(fecha_ref)
+    es_dia_pasado = fecha_ref < date.today()
+
     st.markdown(
-        f'<div class="section-banner"><div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) AUDITADOS EN DECIMAL</div>'
-        f'<div class="section-banner-tag">UMBRAL +EV: &ge;{umbral_ev_pts:.1f} PTS &bull; CUOTAS DECIMALES EN VIVO</div></div>',
+        f'<div class="section-banner"><div class="section-banner-title">🗓️ CARTELERA NBA — {fecha_legible.upper()} // {len(sim_results)} JUEGO(S)</div>'
+        f'<div class="section-banner-tag">{"JORNADA FINALIZADA (AUDITABLE EN PESTAÑA 2)" if es_dia_pasado else f"MOMIOS ACTIVOS EN DECIMAL &bull; UMBRAL +EV: &ge;{umbral_ev_pts:.1f} PTS"}</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -177,8 +280,9 @@ def render_slate_grid_3x3(
             away_row, home_row = res["away_row"], res["home_row"]
 
             meta = slate_meta[global_idx] if slate_meta and global_idx < len(slate_meta) else {}
-            hora_str = meta.get("hora") or GAME_SLATE_TIMES[global_idx % len(GAME_SLATE_TIMES)]
-            estado_str = meta.get("estado") or f"NBA · {NBA_SEASON_TARGET}"
+            es_finalizado = bool(meta.get("finalizado", False) or es_dia_pasado)
+            hora_str = "FINAL" if es_finalizado else (meta.get("hora") or GAME_SLATE_TIMES[global_idx % len(GAME_SLATE_TIMES)])
+            estado_str = "FINALIZADO" if es_finalizado else (meta.get("estado") or f"NBA · {NBA_SEASON_TARGET}")
             game_id = meta.get("id_partido") or f"{global_idx}_{away_abbr}_{home_abbr}"
 
             total_modelo = float(res["exp_total_pts"])
@@ -224,6 +328,16 @@ def render_slate_grid_3x3(
             )
             fav_win_pct = res["fav_base_win"] * 100.0
             fav_ml_dec = res["home_ml_dec"] if res["fav_abbr"] == home_abbr else res["away_ml_dec"]
+
+            # Si el juego ya finalizó, mostrar también el marcador real junto a la proyección
+            real_away_score = meta.get("score_away_real")
+            real_home_score = meta.get("score_home_real")
+            if es_finalizado and real_away_score is not None and real_home_score is not None and (float(real_away_score) + float(real_home_score) > 0):
+                footer_left = f"REAL: {away_abbr} {float(real_away_score):.0f} - {float(real_home_score):.0f} {home_abbr} (Proy {res['exp_away_pts']:.1f}-{res['exp_home_pts']:.1f})"
+                footer_right = "LISTO PARA AUDITAR ✓"
+            else:
+                footer_left = f"PROY MC: {away_abbr} {res['exp_away_pts']:.1f} - {res['exp_home_pts']:.1f} {home_abbr}"
+                footer_right = f"{res['fav_abbr']} {fav_win_pct:.1f}% (Fair {fav_ml_dec})"
 
             with cols[col_idx]:
                 st.markdown(
@@ -272,8 +386,8 @@ def render_slate_grid_3x3(
                             {badge_spread_html}
                         </div>
                         <div class="grid-quick-forecast">
-                            <span class="grid-forecast-lines">PROY MC: {away_abbr} {res['exp_away_pts']:.1f} - {res['exp_home_pts']:.1f} {home_abbr}</span>
-                            <span class="grid-forecast-win">{res['fav_abbr']} {fav_win_pct:.1f}% (Fair {fav_ml_dec})</span>
+                            <span class="grid-forecast-lines">{footer_left}</span>
+                            <span class="grid-forecast-win">{footer_right}</span>
                         </div>
                     </div>
                     """,
@@ -717,9 +831,8 @@ def _construir_partidos_finalizados_para_auditoria(
 ) -> Tuple[List[Tuple[Dict[str, Any], Dict[str, Any]]], bool]:
     """
     Reúne todos los partidos con `'finalizado': True` desde ESPN Scoreboard y calcula su proyección previa.
-    Si el calendario en curso de ESPN aún no tiene partidos finalizados (ej. antes del inicio de la jornada),
-    genera resultados finales realistas sobre los cruces activos para permitir auditar y calibrar en cualquier momento.
-    Retorna `(lista_pares_(proyeccion, resultado_real), es_simulacion_demo)`.
+    Si el calendario consultado no devuelve juegos finalizados (ej. sin conexión o fuera de calendario),
+    genera resultados finales sobre los cruces activos para permitir auditar y calibrar en cualquier momento.
     """
     finalizados_espn = [ev for ev in calendario_espn if ev.get("finalizado")]
     pares_auditoria: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -748,9 +861,9 @@ def _construir_partidos_finalizados_para_auditoria(
         if pares_auditoria:
             return pares_auditoria, False
 
-    # Respaldo de Cierre de Jornada cuando ESPN aún no reporta juegos 'STATUS_FINAL'
     active_pairs = list(st.session_state.get("active_matchups", FULL_30_TEAM_SLATE[:6]))[:6]
-    rng_demo = np.random.default_rng(int(base_seed) + 777)
+    fecha_seed_offset = int(st.session_state.get("fecha_nba", date.today()).strftime("%Y%m%d")) % 10000
+    rng_demo = np.random.default_rng(int(base_seed) + 777 + fecha_seed_offset)
 
     for idx, (away_name, home_name) in enumerate(active_pairs):
         a_df = df_teams[df_teams["Team"] == away_name]
@@ -774,9 +887,8 @@ def _construir_partidos_finalizados_para_auditoria(
             seed=int(base_seed) + idx * 101,
         )
 
-        # Generar u obtener marcador real guardado en sesión para este cruce
         custom_scores = st.session_state.get("custom_final_scores", {})
-        match_key = f"{a_abbr}@{h_abbr}"
+        match_key = f"{a_abbr}@{h_abbr}_{st.session_state.get('fecha_nba_str', '')}"
         if match_key in custom_scores:
             s_away, s_home, p_real = custom_scores[match_key]
         else:
@@ -812,26 +924,21 @@ def render_post_game_audit_tab(
 ) -> None:
     """
     PESTAÑA 2: 📈 AUDITORÍA POST-PARTIDO & CALIBRACIÓN ADAPTATIVA (FILTRO KALMAN)
-    - Muestra tarjetas comparativas (Marcador Real vs. Proyección Previa del Modelo, Desviación de Spread y Total).
-    - Incluye controles para consultar otra fecha de ESPN o ajustar marcadores reales en vivo.
-    - Incluye el botón principal "⚡ Calibrar Todos los Partidos Finalizados" que actualiza `st.session_state.df_nba` y ejecuta `st.rerun()`.
+    Sincronizada automáticamente con `st.session_state.fecha_nba`.
     """
+    fecha_sel: date = st.session_state.get("fecha_nba", date.today())
+    fecha_legible = formatear_fecha_larga_es(fecha_sel)
+
     st.markdown(
-        '<div class="section-banner">'
-        '<div class="section-banner-title">📈 AUDITORÍA POST-PARTIDO &amp; CALIBRACIÓN ADAPTATIVA (FILTRO KALMAN)</div>'
-        '<div class="section-banner-tag">FEEDBACK LOOP &bull; AJUSTE DINÁMICO DE PACE, OFF_RTG Y DEF_RTG</div>'
+        f'<div class="section-banner">'
+        f'<div class="section-banner-title">📈 AUDITORÍA POST-PARTIDO &amp; CALIBRACIÓN KALMAN — {fecha_legible.upper()}</div>'
+        f'<div class="section-banner-tag">FEEDBACK LOOP &bull; FECHA ESPN: {fecha_sel.strftime("%Y%m%d")}</div>'
         "</div>",
         unsafe_allow_html=True,
     )
 
-    ctrl_c1, ctrl_c2, ctrl_c3 = st.columns([1.5, 1.3, 1.4])
+    ctrl_c1, ctrl_c2 = st.columns([2.2, 1.8])
     with ctrl_c1:
-        fecha_audit = st.date_input(
-            "📅 Fecha de Jornada a Auditar (ESPN Scoreboard)",
-            value=st.session_state.get("fecha_auditoria_date", date.today() - timedelta(days=1)),
-            key="date_picker_audit",
-        )
-    with ctrl_c2:
         learning_rate = st.slider(
             "⚡ Ganancia Kalman (Learning Rate α)",
             min_value=0.02,
@@ -840,15 +947,16 @@ def render_post_game_audit_tab(
             step=0.01,
             help="Controla qué porcentaje del residual post-partido se transfiere a los ratings base de Pace, Off_Rtg y Def_Rtg.",
         )
-    with ctrl_c3:
-        st.write("")
-        if st.button("🔍 Consultar Finalizados ESPN en Fecha", use_container_width=True):
-            fecha_str = fecha_audit.strftime("%Y%m%d")
-            st.session_state.fecha_auditoria_date = fecha_audit
-            st.session_state.calendario_auditoria_nba = obtener_calendario_nba_hoy(fecha_yyyymmdd=fecha_str)
-            st.rerun()
+    with ctrl_c2:
+        st.markdown(
+            f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.76rem; color:#CBD5E1; padding-top:10px;">'
+            f'📅 Día auditado: <strong style="color:#00F5D4;">{fecha_legible} ({fecha_sel.strftime("%Y-%m-%d")})</strong><br/>'
+            f'Usa los botones <code>[◀ Ayer] [Hoy] [Mañana ▶]</code> para cambiar de jornada.'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-    calendario_fuente = st.session_state.get("calendario_auditoria_nba") or st.session_state.get("calendario_nba", [])
+    calendario_fuente = st.session_state.get("calendario_nba", [])
     pares_auditoria, es_modo_demo = _construir_partidos_finalizados_para_auditoria(
         df_teams=df_teams,
         calendario_espn=calendario_fuente,
@@ -857,17 +965,15 @@ def render_post_game_audit_tab(
         base_seed=base_seed,
     )
 
-    if es_modo_demo:
+    if not es_modo_demo:
         st.caption(
-            "ℹ️ Actualmente no hay partidos con estado `STATUS_FINAL` en la fecha consultada de ESPN. "
-            "Se muestran los cruces activos en modo de Cierre de Jornada (puedes editar cualquier marcador real antes de calibrar)."
+            f"✅ Mostrando {len(pares_auditoria)} partido(s) oficial(es) con estado `Final` (`STATUS_FINAL`) del **{fecha_legible}** listos para auditar."
         )
     else:
         st.caption(
-            f"✅ Mostrando {len(pares_auditoria)} partido(s) oficial(es) con estado `STATUS_FINAL` extraídos desde ESPN Scoreboard."
+            f"ℹ️ Mostrando {len(pares_auditoria)} partido(s) de la jornada ({fecha_legible}) listos para auditar y calibrar (puedes ajustar manualmente cualquier marcador final)."
         )
 
-    # Calcular auditorías de todos los partidos finalizados
     lista_auditorias: List[Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
 
     for idx_start in range(0, len(pares_auditoria), 2):
@@ -878,7 +984,7 @@ def render_post_game_audit_tab(
             g_idx = idx_start + c_i
             a_abbr = proy["away_abbr"]
             h_abbr = proy["home_abbr"]
-            match_key = f"{a_abbr}@{h_abbr}"
+            match_key = f"{a_abbr}@{h_abbr}_{fecha_sel.strftime('%Y%m%d')}"
 
             with row_cols[c_i]:
                 with st.expander(f"✏️ Ajustar Marcador Final Manual ({a_abbr} @ {h_abbr})", expanded=False):
@@ -930,7 +1036,7 @@ def render_post_game_audit_tab(
                     f"""
                     <div class="kalman-audit-card">
                         <div class="grid-card-top">
-                            <span class="grid-league-badge">STATUS_FINAL &bull; {a_abbr} @ {h_abbr}</span>
+                            <span class="grid-league-badge">FINALIZADO &bull; {a_abbr} @ {h_abbr}</span>
                             <span style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; font-weight:800; color:{winner_badge_color};">
                                 [{winner_badge_text}]
                             </span>
@@ -989,7 +1095,7 @@ def render_post_game_audit_tab(
         df_actual = st.session_state.df_nba.copy()
         nuevos_registros_hist: List[Dict[str, Any]] = []
 
-        for proy, _, aud in lista_auditorias:
+        for _, _, aud in lista_auditorias:
             a_abbr = aud["away_abbr"]
             h_abbr = aud["home_abbr"]
 
@@ -1010,6 +1116,7 @@ def render_post_game_audit_tab(
 
             nuevos_registros_hist.append(
                 {
+                    "Fecha": fecha_sel.strftime("%Y-%m-%d"),
                     "Partido": f"{a_abbr} @ {h_abbr}",
                     "Marcador_Real": f"{aud['score_away_real']:.0f}-{aud['score_home_real']:.0f}",
                     "Proy_Modelo": f"{aud['exp_away_pts']:.1f}-{aud['exp_home_pts']:.1f}",
@@ -1027,7 +1134,7 @@ def render_post_game_audit_tab(
         st.session_state.df_nba = sincronizar_df_nba_con_lineups(df_actual, st.session_state.lineups_nba)
         st.session_state.historial_calibracion = nuevos_registros_hist
         st.session_state.calibracion_aplicada_ok = True
-        st.session_state.data_source_label = f"Kalman Calibrado ({len(nuevos_registros_hist)} partidos, α={learning_rate:.2f})"
+        st.session_state.data_source_label = f"Kalman Calibrado ({fecha_sel.strftime('%Y-%m-%d')}, α={learning_rate:.2f})"
         st.session_state.roster_editor_version += 1
         st.session_state.lineup_editor_version += 1
         st.rerun()
@@ -1045,6 +1152,10 @@ def render_post_game_audit_tab(
 
 
 def init_session_state() -> None:
+    if "fecha_nba" not in st.session_state:
+        st.session_state.fecha_nba = date.today()
+    if "fecha_nba_str" not in st.session_state:
+        st.session_state.fecha_nba_str = st.session_state.fecha_nba.strftime("%Y%m%d")
     if "lineups_nba" not in st.session_state:
         st.session_state.lineups_nba = build_default_lineups_dict()
     if "df_nba" not in st.session_state:
@@ -1053,13 +1164,14 @@ def init_session_state() -> None:
             st.session_state.df_nba, st.session_state.lineups_nba
         )
     if "calendario_nba" not in st.session_state:
-        st.session_state.calendario_nba = obtener_calendario_nba_hoy()
+        st.session_state.calendario_nba = obtener_calendario_nba(fecha_str=st.session_state.fecha_nba_str)
     if "calendario_auditoria_nba" not in st.session_state:
-        ayer_str = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
-        cal_ayer = obtener_calendario_nba_hoy(fecha_yyyymmdd=ayer_str)
-        st.session_state.calendario_auditoria_nba = cal_ayer if cal_ayer else st.session_state.calendario_nba
+        st.session_state.calendario_auditoria_nba = st.session_state.calendario_nba
     if "lineas_mercado_nba" not in st.session_state:
-        st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=None)
+        st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(
+            api_key=None,
+            fecha_yyyymmdd=st.session_state.fecha_nba_str,
+        )
     if "last_odds_api_key" not in st.session_state:
         st.session_state.last_odds_api_key = ""
     if "modo_manual_respaldo" not in st.session_state:
@@ -1262,7 +1374,7 @@ def main() -> None:
 
     st.sidebar.markdown(
         '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
-        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v13.0 (KALMAN +EV)</div>',
+        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v14.0 (DATE NAV + KALMAN)</div>',
         unsafe_allow_html=True,
     )
 
@@ -1345,34 +1457,37 @@ def main() -> None:
         )
 
     # ==========================================================================
-    # SERVIDOR DE MOMIOS EN VIVO (THE ODDS API + ESPN CONSENSUS FALLBACK DECIMAL)
+    # SERVIDOR DE MOMIOS EN VIVO Y SELECTOR DE FECHA EN SIDEBAR
     # ==========================================================================
     st.sidebar.markdown("### 💹 SERVIDOR DE MOMIOS (DECIMAL)")
     api_key = st.sidebar.text_input("Odds API Key (Opcional)", type="password")
     if api_key != st.session_state.get("last_odds_api_key", ""):
         st.session_state.last_odds_api_key = api_key
-        st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=api_key)
+        st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(
+            api_key=api_key,
+            fecha_yyyymmdd=st.session_state.get("fecha_nba_str"),
+        )
+
+    render_date_navigation_bar(api_key=api_key, location="sidebar")
 
     with st.sidebar:
         if st.button("🔄 Sincronizar Momios y Calendario", use_container_width=True):
             with st.spinner("Auditando líneas en formato decimal (The Odds API / ESPN Scoreboard)..."):
-                st.session_state.calendario_nba = obtener_calendario_nba_hoy()
-                st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=api_key)
-                st.session_state.nba_partido_activo = None
+                _sincronizar_jornada_por_fecha(st.session_state.fecha_nba, api_key=api_key)
                 if st.session_state.calendario_nba:
                     st.session_state.modo_manual_respaldo = False
                     st.success(
-                        f"Cartelera sincronizada: {len(st.session_state.calendario_nba)} partido(s) | "
-                        f"{len(st.session_state.lineas_mercado_nba)} línea(s) en decimal."
+                        f"Cartelera sincronizada ({st.session_state.fecha_nba_str}): "
+                        f"{len(st.session_state.calendario_nba)} partido(s)."
                     )
                 else:
-                    st.info("Sin juegos programados hoy en ESPN. Operando con selector manual y consenso decimal.")
+                    st.info("Sin juegos programados en ESPN para esa fecha. Operando con selector manual y consenso decimal.")
 
         if st.session_state.calendario_nba:
             st.checkbox(
                 "🎛️ Usar Selector Manual de Respaldo",
                 key="modo_manual_respaldo",
-                help="Activa esta casilla si deseas simular cruces personalizados en lugar del calendario oficial de hoy.",
+                help="Activa esta casilla si deseas simular cruces personalizados en lugar del calendario oficial de la fecha seleccionada.",
             )
 
         st.markdown("### 🌐 TELEMETRÍA NBA.COM API")
@@ -1407,19 +1522,21 @@ def main() -> None:
         umbral_ev_pts = st.slider("Umbral Mínimo de Valor (+EV Pts)", min_value=1.0, max_value=6.0, value=3.0, step=0.5)
         base_seed = st.number_input("Semilla Cuantitativa (RNG Seed)", min_value=1, max_value=999999, value=2026, step=1)
 
-        st.caption(f"🗓️ Partidos ESPN Hoy: {len(st.session_state.calendario_nba)}")
+        st.caption(f"🗓️ Partidos ESPN ({st.session_state.fecha_nba_str}): {len(st.session_state.calendario_nba)}")
         st.caption(f"💹 Líneas Mercado Activas: {len(st.session_state.get('lineas_mercado_nba', {}))}")
         st.caption(f"📂 Fuente Ratings: {st.session_state.get('data_source_label', 'Respaldo Local')}")
 
     df_teams = st.session_state.df_nba
     team_list = df_teams["Team"].tolist()
-    calendario_hoy = st.session_state.calendario_nba
+    fecha_seleccionada: date = st.session_state.fecha_nba
+    fecha_legible_es = formatear_fecha_larga_es(fecha_seleccionada)
+    calendario_dia = st.session_state.calendario_nba
     lineas_mercado_dict: Dict[str, Dict[str, Any]] = st.session_state.get("lineas_mercado_nba", {})
 
     espn_matchups_validos: List[Tuple[str, str]] = []
     espn_meta_validos: List[Dict] = []
 
-    for item in calendario_hoy:
+    for item in calendario_dia:
         a_abbr = str(item.get("away_abbr", "")).upper()
         h_abbr = str(item.get("home_abbr", "")).upper()
         a_match = df_teams[df_teams["Team_Abbr"].astype(str).str.upper() == a_abbr]
@@ -1432,28 +1549,34 @@ def main() -> None:
     active_games_count = len(espn_matchups_validos) if usar_espn_en_vivo else int(st.session_state.get("num_games", 6))
     odds_provider_badge = "THE ODDS API (DECIMAL)" if api_key else "ESPN CONSENSUS FALLBACK (DECIMAL)"
 
+    # ==========================================================================
+    # ENCABEZADO PRINCIPAL CON EL DÍA SELECCIONADO (ej. "Cartelera NBA — Miércoles, 28 de Octubre")
+    # ==========================================================================
     st.markdown(
         f"""
         <div class="tv-master-header">
             <div class="tv-top-bar">
                 <div class="syndicate-badge"><span class="pulse-dot"></span> SHARP SYNDICATE // {odds_provider_badge}</div>
                 <div class="font-mono" style="font-size:0.76rem; color:#94A3B8;">
-                    FORMATO CUOTAS: <strong style="color:#00F5D4;">DECIMAL ESTRICTO</strong> &nbsp;|&nbsp;
+                    ENDPOINT ESPN: <strong style="color:#00F5D4;">?dates={fecha_seleccionada.strftime('%Y%m%d')}</strong> &nbsp;|&nbsp;
                     SIMULATIONS: <strong style="color:#F8FAFC;">{n_sims:,} / GAME</strong> &nbsp;|&nbsp;
                     FEEDBACK LOOP: <strong style="color:#38BDF8;">KALMAN ADAPTIVE</strong>
                 </div>
             </div>
-            <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
-            <div class="tv-subtitle">Auditoría de líneas de mercado (+EV Decimal), Player Props Multimercado (PTS, REB, AST) y Calibración Adaptativa Post-Partido (Filtro Kalman).</div>
+            <div class="tv-title">Cartelera NBA &mdash; {fecha_legible_es}</div>
+            <div class="tv-subtitle">TERMINAL SHARP: NBA QUANT SCANNER &bull; Navegación diaria por fecha (<code>YYYYMMDD</code>), auditoría de líneas (+EV Decimal), Player Props (PTS/REB/AST) y Calibración Kalman.</div>
             <div class="tv-telemetry-strip">
-                <div class="telemetry-pill">CARTELERA HOY: <strong>{active_games_count} PARTIDO(S)</strong></div>
-                <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{active_games_count * n_sims:,}</strong></div>
+                <div class="telemetry-pill">JORNADA ACTIVA: <strong>{fecha_legible_es.upper()} ({fecha_seleccionada.strftime('%Y-%m-%d')})</strong></div>
+                <div class="telemetry-pill">PARTIDOS EN CARTELERA: <strong>{active_games_count} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">FUENTE EN MEMORIA: <strong>{st.session_state.get('data_source_label', 'nba_stats_completo.csv')}</strong></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    # Barra de navegación rápida de fecha en la parte superior del tablero: [◀ Ayer] [Hoy] [Mañana ▶]
+    render_date_navigation_bar(api_key=api_key, location="top")
 
     render_live_roster_manager()
 
@@ -1495,8 +1618,8 @@ def main() -> None:
             else:
                 if not espn_matchups_validos:
                     st.info(
-                        "📅 Hoy no hay partidos programados en el calendario oficial de ESPN (o el servicio está fuera de horario). "
-                        "Puedes seleccionar y simular manualmente cualquier cruce de las 30 franquicias a continuación."
+                        f"📅 No se encontraron partidos oficiales en ESPN para el **{fecha_legible_es}** (`{fecha_seleccionada.strftime('%Y%m%d')}`). "
+                        "Se muestra la cartelera de respaldo manual (puedes cambiar de fecha con `[◀ Ayer] [Hoy] [Mañana ▶]` o elegir los cruces abajo)."
                     )
                 render_manual_slate_selector(df_teams, n_sims=n_sims, expanded_default=st.session_state.config_expanded)
                 num_games_manual = int(st.session_state.get("num_games", 6))
@@ -1543,7 +1666,12 @@ def main() -> None:
 
                 radar_picks = extract_executive_radar(sim_results)
                 render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
-                render_slate_grid_3x3(sim_results, slate_meta=slate_meta, umbral_ev_pts=umbral_ev_pts)
+                render_slate_grid_3x3(
+                    sim_results,
+                    slate_meta=slate_meta,
+                    umbral_ev_pts=umbral_ev_pts,
+                    fecha_seleccionada=fecha_seleccionada,
+                )
 
         else:
             active_info = st.session_state.nba_partido_activo

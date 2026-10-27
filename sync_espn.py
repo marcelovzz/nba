@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 import json
 import re
@@ -36,6 +36,31 @@ NBA_TEAMS: List[str] = [
     "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
     "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS",
 ]
+
+DIAS_SEMANA_ES: Dict[int, str] = {
+    0: "Lunes",
+    1: "Martes",
+    2: "Miércoles",
+    3: "Jueves",
+    4: "Viernes",
+    5: "Sábado",
+    6: "Domingo",
+}
+
+MESES_ES: Dict[int, str] = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
 
 # Mapeo exhaustivo de abreviaturas cortas y nombres completos (The Odds API + ESPN) -> 3 letras NBA
 ESPN_TO_NBA_ABBR: Dict[str, str] = {
@@ -209,6 +234,16 @@ except Exception:
     NBA_API_AVAILABLE = False
 
 
+def formatear_fecha_larga_es(fecha_obj: date) -> str:
+    """
+    Formatea un objeto `datetime.date` en español con el formato:
+    'Miércoles, 28 de Octubre'
+    """
+    dia_nombre = DIAS_SEMANA_ES.get(fecha_obj.weekday(), "Día")
+    mes_nombre = MESES_ES.get(fecha_obj.month, "Mes")
+    return f"{dia_nombre}, {fecha_obj.day} de {mes_nombre}"
+
+
 def normalizar_abbr_nba(team_identifier: str) -> str:
     """
     Normaliza cualquier abreviatura o nombre de franquicia (de ESPN o The Odds API)
@@ -297,7 +332,6 @@ def _extraer_posesiones_boxscore_competitor(team_entry: Dict[str, Any]) -> Optio
     Intenta calcular las posesiones reales de un equipo a partir de las estadísticas
     de boxscore incluidas en el bloque `competitors[i].statistics` de ESPN:
         Poss = 0.96 * (FGA - ORB + TOV + 0.44 * FTA)
-    Retorna None si el endpoint de scoreboard no desglosa esos campos.
     """
     stats_list = team_entry.get("statistics", [])
     if not isinstance(stats_list, list) or not stats_list:
@@ -311,7 +345,6 @@ def _extraer_posesiones_boxscore_competitor(team_entry: Dict[str, Any]) -> Optio
         val_raw = st_item.get("displayValue", st_item.get("value"))
         if val_raw is None:
             continue
-        # Manejar formato "42-88" en FG o FT
         if isinstance(val_raw, str) and "-" in val_raw:
             parts = val_raw.split("-")
             if len(parts) == 2:
@@ -445,11 +478,13 @@ def _extraer_odds_desde_evento_espn(
     }
 
 
-def _consultar_espn_scoreboard_raw(fecha_yyyymmdd: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Realiza la petición HTTP al endpoint público de ESPN Scoreboard."""
-    url = ESPN_SCOREBOARD_URL
-    if fecha_yyyymmdd:
-        url = f"{ESPN_SCOREBOARD_URL}?dates={fecha_yyyymmdd}"
+def _consultar_espn_scoreboard_raw(fecha_str: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Realiza la petición HTTP al endpoint público de ESPN Scoreboard concatenando `?dates={fecha_str}`.
+    Si no se pasa `fecha_str`, usa por defecto la fecha actual del sistema en formato 'YYYYMMDD'.
+    """
+    target_date_str = str(fecha_str).strip() if fecha_str else datetime.now().strftime("%Y%m%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={target_date_str}"
 
     try:
         resp = requests.get(url, headers=ESPN_HEADERS, timeout=10)
@@ -472,13 +507,9 @@ def obtener_lineas_mercado_nba(
     1. Consulta The Odds API para la NBA:
        - URL: 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds/'
        - Parámetros: 'regions=us', 'markets=totals,spreads', 'oddsFormat=decimal'
-    2. Extrae por cada partido programado:
-       - 'total_mercado', 'cuota_over_decimal', 'cuota_under_decimal'
-       - 'spread_mercado_home', 'cuota_spread_home_decimal', 'cuota_spread_away_decimal'
-    3. Normaliza las abreviaturas de las 30 franquicias (GSW, NYK, SAS, NOP, etc.).
-    4. Módulo Fallback de Respaldo: Si no se pasa API key o falla la llamada, extrae las líneas
+    2. Módulo Fallback de Respaldo: Si no se pasa API key o falla la llamada, extrae las líneas
        de consenso directamente del endpoint público de ESPN Scoreboard ('competitions[0].odds')
-       convirtiendo cualquier momio americano a decimal con 2 decimales.
+       para la fecha solicitada (`?dates={fecha_yyyymmdd}`) en formato decimal.
     """
     lineas_por_partido: Dict[str, Dict[str, Any]] = {}
     clean_key = str(api_key).strip() if api_key else ""
@@ -591,7 +622,7 @@ def obtener_lineas_mercado_nba(
         except Exception:
             pass
 
-    payload_espn = _consultar_espn_scoreboard_raw(fecha_yyyymmdd=fecha_yyyymmdd)
+    payload_espn = _consultar_espn_scoreboard_raw(fecha_str=fecha_yyyymmdd)
     if isinstance(payload_espn, dict):
         for ev in payload_espn.get("events", []):
             try:
@@ -637,17 +668,18 @@ def obtener_lineas_mercado_nba(
     return lineas_por_partido
 
 
-def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dict[str, Any]]:
+def obtener_calendario_nba(fecha_str: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Consulta el endpoint público de ESPN Scoreboard:
-    https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard
-    Extrae y parsea los partidos de la fecha indicada:
-      - Si el status es 'STATUS_FINAL' o 'Final' (o state == 'post'):
-        * Extrae 'score_away_real' y 'score_home_real'.
-        * Calcula 'pace_real' desde las estadísticas de posesiones del boxscore o vía `(puntos_totales) / 2.25`.
-        * Marca la bandera `'finalizado': True`.
+    Consulta el endpoint público de ESPN Scoreboard para una fecha específica en formato 'YYYYMMDD':
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={fecha_str}`
+    - Si `fecha_str` es None o vacío, utiliza por defecto la fecha actual del sistema (`datetime.now().strftime("%Y%m%d")`).
+    - Si el status del partido es 'STATUS_FINAL' o 'Final' (o `state == 'post'`), extrae:
+      * 'score_away_real' y 'score_home_real'
+      * 'pace_real' (desde estadísticas de boxscore o vía `(puntos_totales) / 2.25`)
+      * Marca la bandera `'finalizado': True`.
     """
-    payload = _consultar_espn_scoreboard_raw(fecha_yyyymmdd=fecha_yyyymmdd)
+    target_fecha = str(fecha_str).strip() if fecha_str else datetime.now().strftime("%Y%m%d")
+    payload = _consultar_espn_scoreboard_raw(fecha_str=target_fecha)
     if not isinstance(payload, dict):
         return []
 
@@ -755,6 +787,7 @@ def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dic
 
             item_cal: Dict[str, Any] = {
                 "id_partido": id_partido or f"{away_abbr}_{home_abbr}",
+                "fecha_str": target_fecha,
                 "nombre": nombre_evento,
                 "away_abbr": away_abbr,
                 "home_abbr": home_abbr,
@@ -774,6 +807,11 @@ def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dic
             continue
 
     return calendario
+
+
+# Alias de retrocompatibilidad para llamadas existentes
+def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dict[str, Any]]:
+    return obtener_calendario_nba(fecha_str=fecha_yyyymmdd)
 
 
 # ==============================================================================
