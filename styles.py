@@ -30,7 +30,7 @@ TEAM_RECENT_FORM: Dict[str, List[str]] = {
 
 
 def inject_cyber_quant_css() -> None:
-    """Inyecta la hoja de estilos Cyber-Quant UI (Glassmorphism, Orbitron, JetBrains Mono, Scoreboard TV y Badges +EV)."""
+    """Inyecta la hoja de estilos Cyber-Quant UI (Glassmorphism, Orbitron, JetBrains Mono, Scoreboard TV, Badges +EV y Auditoría Kalman)."""
     st.markdown(
         """
         <style>
@@ -72,6 +72,24 @@ def inject_cyber_quant_css() -> None:
         section[data-testid="stSidebar"] * { font-family: 'Inter', sans-serif; }
         h1, h2, h3, .font-orbitron { font-family: 'Orbitron', sans-serif !important; letter-spacing: 0.06em; }
         .font-mono { font-family: 'JetBrains Mono', monospace !important; }
+
+        /* Estilizado de Pestañas st.tabs Cyber-Quant */
+        button[data-baseweb="tab"] {
+            font-family: 'Orbitron', sans-serif !important;
+            font-size: 0.88rem !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.06em !important;
+            color: #94A3B8 !important;
+            background: rgba(11, 18, 35, 0.65) !important;
+            border-radius: 10px 10px 0 0 !important;
+            padding: 10px 20px !important;
+            margin-right: 6px !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #00F5D4 !important;
+            background: rgba(0, 245, 212, 0.12) !important;
+            border-bottom: 3px solid #00F5D4 !important;
+        }
 
         .tv-master-header {
             background: linear-gradient(135deg, rgba(11, 18, 35, 0.92) 0%, rgba(18, 28, 52, 0.85) 100%);
@@ -192,6 +210,41 @@ def inject_cyber_quant_css() -> None:
         .grid-forecast-lines { color: #F8FAFC; font-weight: 800; }
         .grid-forecast-win { color: #00F5D4; font-weight: 700; font-size: 0.72rem; }
 
+        /* Tarjetas de Auditoría Post-Partido & Calibración Kalman */
+        .kalman-audit-card {
+            background: linear-gradient(155deg, rgba(14, 22, 44, 0.90) 0%, rgba(7, 12, 24, 0.96) 100%);
+            border: 1px solid rgba(56, 189, 248, 0.30);
+            border-radius: 16px;
+            padding: 16px 18px;
+            margin-bottom: 14px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.50);
+        }
+        .kalman-score-strip {
+            display: flex; justify-content: space-between; align-items: center;
+            background: rgba(5, 8, 17, 0.78);
+            border: 1px solid rgba(0, 245, 212, 0.22);
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin: 8px 0;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .kalman-residual-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .kalman-residual-box {
+            background: rgba(9, 14, 28, 0.85);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            border-radius: 8px;
+            padding: 7px 9px;
+            text-align: center;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .kalman-residual-title { font-size: 0.66rem; color: #94A3B8; text-transform: uppercase; }
+        .kalman-residual-val { font-size: 0.92rem; font-weight: 800; color: #F8FAFC; margin-top: 2px; }
+
         .game-glass-wrapper {
             background: linear-gradient(165deg, rgba(13, 21, 40, 0.86) 0%, rgba(7, 12, 24, 0.94) 100%);
             border: 1px solid rgba(0, 245, 212, 0.26); border-radius: 18px; padding: 22px 24px;
@@ -281,6 +334,7 @@ def inject_cyber_quant_css() -> None:
         @media (max-width: 900px) {
             .scoreboard-tv-header { grid-template-columns: 1fr; text-align: center; }
             .sb-team-block, .sb-team-block.right { justify-content: center; text-align: center; }
+            .kalman-residual-grid { grid-template-columns: 1fr; }
         }
         </style>
         """,

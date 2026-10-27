@@ -20,6 +20,11 @@ LEAGUE_AVG_TOV = 13.1
 NBA_TOTAL_SIM_STD = 13.6
 NBA_MARGIN_SIM_STD = 11.8
 
+# Límites de seguridad (clipping) para ratings de la NBA moderna en Calibración Kalman
+PACE_CLIP_RANGE: Tuple[float, float] = (92.0, 106.5)
+ORTG_CLIP_RANGE: Tuple[float, float] = (104.0, 126.5)
+DRTG_CLIP_RANGE: Tuple[float, float] = (104.0, 124.5)
+
 GAME_SLATE_TIMES: List[str] = [
     "19:00 ET", "19:30 ET", "19:30 ET", "20:00 ET", "20:00 ET",
     "20:30 ET", "20:30 ET", "21:00 ET", "21:00 ET", "21:30 ET",
@@ -247,7 +252,6 @@ def _derivar_metricas_base_jugador(
     if pos_up in {"BENCH", "BANCA"}:
         return 0.0, 0.0, 0.0
 
-    # 1. PPG_Base
     s1_name = str(t_meta.get("Star1_Name", "")).strip().lower()
     s2_name = str(t_meta.get("Star2_Name", "")).strip().lower()
     if p_low == s1_name and "Star1_PPG" in t_meta:
@@ -257,7 +261,6 @@ def _derivar_metricas_base_jugador(
     else:
         ppg_base = max(8.5, (minutos_base * 0.52) + (o_epm * 1.55))
 
-    # 2. RPG_Base y APG_Base
     if p_low in STAR_BASE_REB_AST_MAP:
         rpg_base, apg_base = STAR_BASE_REB_AST_MAP[p_low]
     else:
@@ -274,7 +277,7 @@ def _derivar_metricas_base_jugador(
         elif pos_up == "SG":
             rpg_base = (4.3 + max(0.0, d_epm) * 0.30) * min_scale
             apg_base = (4.4 + max(0.0, o_epm) * 0.55) * min_scale
-        else:  # PG
+        else:
             rpg_base = (4.0 + max(0.0, d_epm) * 0.25) * min_scale
             apg_base = (6.8 + max(0.0, o_epm) * 0.70) * min_scale
 
@@ -298,6 +301,7 @@ def build_default_lineups_dict() -> Dict[str, pd.DataFrame]:
             ppg_b, rpg_b, apg_b = _derivar_metricas_base_jugador(p_name, pos_str, mins_esp, o_epm, d_epm, abbr)
             row_copy = dict(r)
             row_copy["Minutos_Base"] = round(mins_esp, 1)
+            row_copy["Pace_Diff"] = 0.0
             row_copy["PPG_Base"] = ppg_b
             row_copy["RPG_Base"] = rpg_b
             row_copy["APG_Base"] = apg_b
@@ -333,7 +337,6 @@ def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str
     if df_res is None:
         df_res = build_default_lineups_dict()[abbr].copy()
 
-    # Asegurar que existan Minutos_Base, PPG_Base, RPG_Base y APG_Base
     if not {"Minutos_Base", "PPG_Base", "RPG_Base", "APG_Base"}.issubset(df_res.columns):
         default_lu = {
             str(r["Jugador"]).lower(): r for r in DEFAULT_LINEUPS_30_TEAMS.get(abbr, [])
@@ -362,6 +365,182 @@ def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str
 
 
 # ==============================================================================
+# SISTEMA DE AUDITORÍA POST-PARTIDO Y CALIBRACIÓN ADAPTATIVA (FILTRO KALMAN)
+# ==============================================================================
+def auditar_partido_nba(proyeccion: Dict[str, Any], resultado_real: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Módulo de Auditoría Post-Partido para NBA:
+    Calcula los residuales entre la proyección previa del modelo Monte Carlo y el resultado real:
+      - `Error_Away`: Puntos reales anotados por la visita menos puntos proyectados (`score_away_real - exp_away_pts`)
+      - `Error_Home`: Puntos reales anotados por el local menos puntos proyectados (`score_home_real - exp_home_pts`)
+      - `Error_Spread`: Diferencial real del local (`margen_real_home`) menos diferencial proyectado (`exp_margin_home`)
+      - `Error_Total`: Total de puntos reales (`total_real`) menos total proyectado (`exp_total_pts`)
+      - `Error_Pace`: Ritmo real estimado (`pace_real`) menos posesiones proyectadas (`exp_possessions`)
+    """
+    exp_away = float(proyeccion.get("exp_away_pts", proyeccion.get("pts_away_modelo", 112.0)))
+    exp_home = float(proyeccion.get("exp_home_pts", proyeccion.get("pts_home_modelo", 114.5)))
+    exp_total = float(proyeccion.get("exp_total_pts", exp_away + exp_home))
+    exp_margin_home = float(proyeccion.get("exp_margin_home", exp_home - exp_away))
+    proj_spread_home = float(proyeccion.get("proj_spread_home", -exp_margin_home))
+    exp_pace = float(proyeccion.get("exp_possessions", proyeccion.get("pace_modelo", 99.0)))
+
+    real_away = float(resultado_real.get("score_away_real", 0.0))
+    real_home = float(resultado_real.get("score_home_real", 0.0))
+    real_total = real_away + real_home
+    real_margin_home = real_home - real_away
+    real_spread_home = -real_margin_home
+    real_pace = float(
+        resultado_real.get("pace_real")
+        if resultado_real.get("pace_real") is not None and float(resultado_real.get("pace_real", 0.0)) > 0
+        else (real_total / 2.25 if real_total > 0 else exp_pace)
+    )
+
+    error_away = round(real_away - exp_away, 2)
+    error_home = round(real_home - exp_home, 2)
+    error_spread = round(real_margin_home - exp_margin_home, 2)
+    error_total = round(real_total - exp_total, 2)
+    error_pace = round(real_pace - exp_pace, 2)
+
+    ganador_proy = str(proyeccion.get("home_abbr", "HOME")) if exp_home >= exp_away else str(proyeccion.get("away_abbr", "AWAY"))
+    ganador_real = str(proyeccion.get("home_abbr", "HOME")) if real_home >= real_away else str(proyeccion.get("away_abbr", "AWAY"))
+    acierto_ganador = bool(ganador_proy == ganador_real)
+
+    return {
+        "away_abbr": str(proyeccion.get("away_abbr", resultado_real.get("away_abbr", "AWAY"))),
+        "home_abbr": str(proyeccion.get("home_abbr", resultado_real.get("home_abbr", "HOME"))),
+        "exp_away_pts": round(exp_away, 1),
+        "exp_home_pts": round(exp_home, 1),
+        "exp_total_pts": round(exp_total, 1),
+        "exp_margin_home": round(exp_margin_home, 1),
+        "proj_spread_home": round(proj_spread_home, 1),
+        "exp_pace": round(exp_pace, 1),
+        "score_away_real": round(real_away, 1),
+        "score_home_real": round(real_home, 1),
+        "total_real": round(real_total, 1),
+        "margen_real_home": round(real_margin_home, 1),
+        "spread_real_home": round(real_spread_home, 1),
+        "pace_real": round(real_pace, 1),
+        "Error_Away": error_away,
+        "Error_Home": error_home,
+        "Error_Spread": error_spread,
+        "Error_Total": error_total,
+        "Error_Pace": error_pace,
+        "mae_pts": round((abs(error_away) + abs(error_home)) / 2.0, 2),
+        "acierto_ganador": acierto_ganador,
+    }
+
+
+def calibrar_ratings_nba(
+    df_equipos: pd.DataFrame,
+    away_abbr: str,
+    home_abbr: str,
+    auditoria: Dict[str, Any],
+    learning_rate: float = 0.08,
+    lineups_dict: Optional[Dict[str, pd.DataFrame]] = None,
+) -> pd.DataFrame:
+    """
+    Calibración Adaptativa tipo Filtro Kalman / Feedback Loop para NBA:
+      1. Ajusta el 'Pace' (y 'Base_Pace') de ambos equipos con el residual de ritmo (`Error_Pace`).
+      2. Ajusta 'Off_Rtg' y 'Def_Rtg' (y sus columnas base) en el DataFrame de equipos según
+         los puntos reales anotados/permitidos frente a la proyección (`Error_Away`, `Error_Home`).
+      3. Aplica límites de seguridad (clipping) para mantener los ratings en rangos lógicos de la NBA moderna:
+         - Pace: [92.0, 106.5]
+         - Off_Rtg: [104.0, 126.5]
+         - Def_Rtg: [104.0, 124.5]
+      4. Si se proporciona `lineups_dict` (o existe `st.session_state.lineups_nba`), sincroniza también
+         el delta de `O_EPM`, `D_EPM` y `Pace_Diff` de los titulares para que el motor Bottom-Up y el
+         Excel calibrado reflejen exactamente los nuevos ratings.
+    """
+    df_cal = df_equipos.copy()
+    a_code = str(away_abbr).strip().upper()
+    h_code = str(home_abbr).strip().upper()
+    lr = float(np.clip(learning_rate, 0.01, 0.35))
+
+    err_away = float(auditoria.get("Error_Away", 0.0))
+    err_home = float(auditoria.get("Error_Home", 0.0))
+    err_pace = float(auditoria.get("Error_Pace", 0.0))
+    pace_ref = max(float(auditoria.get("pace_real", 99.0)), 88.0)
+
+    # Convertir los errores de puntos del partido a escala por 100 posesiones
+    err_away_per100 = err_away * (100.0 / pace_ref)
+    err_home_per100 = err_home * (100.0 / pace_ref)
+
+    # Deltas Kalman:
+    # - Si Away anotó más de lo esperado (err_away > 0): sube Off_Rtg de Away y sube Def_Rtg de Home (peor defensa)
+    # - Si Home anotó más de lo esperado (err_home > 0): sube Off_Rtg de Home y sube Def_Rtg de Away (peor defensa)
+    delta_away_off = lr * err_away_per100
+    delta_home_def = lr * err_away_per100
+
+    delta_home_off = lr * err_home_per100
+    delta_away_def = lr * err_home_per100
+
+    delta_pace = lr * err_pace
+
+    away_mask = df_cal["Team_Abbr"].astype(str).str.strip().str.upper() == a_code
+    home_mask = df_cal["Team_Abbr"].astype(str).str.strip().str.upper() == h_code
+
+    if away_mask.any():
+        idx_a = df_cal[away_mask].index[0]
+        new_a_pace = round(float(np.clip(float(df_cal.loc[idx_a, "Pace"]) + delta_pace, *PACE_CLIP_RANGE)), 1)
+        new_a_off = round(float(np.clip(float(df_cal.loc[idx_a, "Off_Rtg"]) + delta_away_off, *ORTG_CLIP_RANGE)), 1)
+        new_a_def = round(float(np.clip(float(df_cal.loc[idx_a, "Def_Rtg"]) + delta_away_def, *DRTG_CLIP_RANGE)), 1)
+
+        df_cal.loc[idx_a, "Pace"] = new_a_pace
+        df_cal.loc[idx_a, "Off_Rtg"] = new_a_off
+        df_cal.loc[idx_a, "Def_Rtg"] = new_a_def
+        if "Base_Pace" in df_cal.columns:
+            df_cal.loc[idx_a, "Base_Pace"] = new_a_pace
+        if "Base_Off_Rtg" in df_cal.columns:
+            df_cal.loc[idx_a, "Base_Off_Rtg"] = new_a_off
+        if "Base_Def_Rtg" in df_cal.columns:
+            df_cal.loc[idx_a, "Base_Def_Rtg"] = new_a_def
+
+    if home_mask.any():
+        idx_h = df_cal[home_mask].index[0]
+        new_h_pace = round(float(np.clip(float(df_cal.loc[idx_h, "Pace"]) + delta_pace, *PACE_CLIP_RANGE)), 1)
+        new_h_off = round(float(np.clip(float(df_cal.loc[idx_h, "Off_Rtg"]) + delta_home_off, *ORTG_CLIP_RANGE)), 1)
+        new_h_def = round(float(np.clip(float(df_cal.loc[idx_h, "Def_Rtg"]) + delta_home_def, *DRTG_CLIP_RANGE)), 1)
+
+        df_cal.loc[idx_h, "Pace"] = new_h_pace
+        df_cal.loc[idx_h, "Off_Rtg"] = new_h_off
+        df_cal.loc[idx_h, "Def_Rtg"] = new_h_def
+        if "Base_Pace" in df_cal.columns:
+            df_cal.loc[idx_h, "Base_Pace"] = new_h_pace
+        if "Base_Off_Rtg" in df_cal.columns:
+            df_cal.loc[idx_h, "Base_Off_Rtg"] = new_h_off
+        if "Base_Def_Rtg" in df_cal.columns:
+            df_cal.loc[idx_h, "Base_Def_Rtg"] = new_h_def
+
+    # Sincronizar ajustes Kalman hacia los quintetos en sesión para que el motor Bottom-Up y el Excel exportado los preserven
+    target_lineups = lineups_dict
+    if target_lineups is None and (st is not None and hasattr(st, "session_state")) and "lineups_nba" in st.session_state:
+        target_lineups = st.session_state.lineups_nba
+
+    if isinstance(target_lineups, dict):
+        synergy_scale = 0.62
+        for t_code, d_off, d_def, d_pace in [
+            (a_code, delta_away_off, delta_away_def, delta_pace),
+            (h_code, delta_home_off, delta_home_def, delta_pace),
+        ]:
+            if t_code in target_lineups:
+                lu_df = target_lineups[t_code].copy()
+                # En calcular_ratings_lineup: proj_off_rtg = 115.5 + sum(slots * O_EPM) * 0.62
+                # y proj_def_rtg = 115.5 - sum(slots * D_EPM) * 0.62 (con sum(slots) = 5.0)
+                o_epm_step = d_off / (5.0 * synergy_scale)
+                d_epm_step = -d_def / (5.0 * synergy_scale)
+                pace_step = d_pace / 5.0
+
+                lu_df["O_EPM"] = (pd.to_numeric(lu_df["O_EPM"], errors="coerce").fillna(0.0) + o_epm_step).clip(-8.0, 10.0).round(2)
+                lu_df["D_EPM"] = (pd.to_numeric(lu_df["D_EPM"], errors="coerce").fillna(0.0) + d_epm_step).clip(-8.0, 10.0).round(2)
+                if "Pace_Diff" not in lu_df.columns:
+                    lu_df["Pace_Diff"] = 0.0
+                lu_df["Pace_Diff"] = (pd.to_numeric(lu_df["Pace_Diff"], errors="coerce").fillna(0.0) + pace_step).clip(-4.0, 4.0).round(2)
+                target_lineups[t_code] = lu_df
+
+    return df_cal
+
+
+# ==============================================================================
 # MOTOR DE PROYECCIÓN DE PLAYER PROPS (PTS, REB, AST) Y VALOR +EV (POISSON DECIMAL)
 # ==============================================================================
 def evaluar_mercado_prop_poisson(
@@ -374,15 +553,7 @@ def evaluar_mercado_prop_poisson(
 ) -> Dict[str, Any]:
     """
     Evalúa un mercado individual de Player Prop (PTS, REB o AST) frente a una línea de sportsbook
-    usando distribución de Poisson con media esperada λ y cuotas en formato decimal:
-      - Probabilidad de Under: P(X <= floor(linea))
-      - Probabilidad de Over: 1 - P(X <= floor(linea))
-      - Cuota justa decimal: `fair_odd = round(1.0 / prob, 2)`
-      - Valor esperado: `EV% = round(((prob * cuota_decimal_mercado) - 1.0) * 100, 1)`
-      - Regla de activación de Badge:
-        * Si `EV_over% >= 5.0%`: `[⚡ VALOR: OVER X.X @ Cuota (+EV%)]`
-        * Si `EV_under% >= 5.0%` o `EV_over% <= -5.0%` (cuando λ < línea): `[⚡ VALOR: UNDER X.X @ Cuota (+EV%)]`
-        * De lo contrario: `[LÍNEA JUSTA]`
+    usando distribución de Poisson con media esperada λ y cuotas en formato decimal.
     """
     lam = max(0.2, float(lambda_esperada))
     linea = round(float(linea_mercado), 1)
@@ -390,7 +561,6 @@ def evaluar_mercado_prop_poisson(
     c_under = round(max(1.01, float(cuota_under_decimal if cuota_under_decimal is not None else cuota_over_decimal)), 2)
 
     k_floor = int(math.floor(linea))
-    # Si la línea es entera (ej. 20.0), P(Under) = P(X <= 19) y P(Over) = P(X >= 21), normalizando sin push
     if abs(linea - round(linea)) < 1e-6 and k_floor >= 1:
         p_under_raw = _poisson_cdf(k_floor - 1, lam)
         p_over_raw = 1.0 - _poisson_cdf(k_floor, lam)
@@ -469,19 +639,7 @@ def proyectar_props_jugador(
     cuotas_mercado: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """
-    Motor Cuantitativo de Proyección de Player Props (PTS, REB, AST) y Auditoría de Valor +EV en Decimal:
-
-    1. Cálculo de Medias Esperadas (λ):
-       - Factor de ritmo: `factor_pace = pace_partido / pace_promedio_liga`
-       - Factor de minutos: `factor_min = minutos_proyectados / jugador_dict['Minutos_Base']`
-       - Puntos esperados (λ_PTS): `PPG_Base * factor_min * factor_pace * (def_rating_rival / 115.0)`
-       - Rebotes esperados (λ_REB): `RPG_Base * factor_min * factor_pace`
-       - Asistencias esperadas (λ_AST): `APG_Base * factor_min * factor_pace * (def_rating_rival / 115.0)`
-
-    2. Evaluación de Valor (+EV) con Distribución de Poisson:
-       - Calcula probabilidades Over/Under con distribución de Poisson de media λ.
-       - Calcula `fair_odd = round(1.0 / prob, 2)` y `EV% = round(((prob * cuota_decimal_mercado) - 1.0) * 100, 1)`.
-       - Activa `[⚡ VALOR: OVER X.X @ Cuota (+EV%)]`, `[⚡ VALOR: UNDER X.X @ Cuota (+EV%)]` o `[LÍNEA JUSTA]`.
+    Motor Cuantitativo de Proyección de Player Props (PTS, REB, AST) y Auditoría de Valor +EV en Decimal.
     """
     nombre = str(jugador_dict.get("Jugador", jugador_dict.get("player_name", "Jugador"))).strip()
     team_abbr = str(jugador_dict.get("Team_Abbr", jugador_dict.get("team_abbr", "NBA"))).strip().upper()
@@ -505,12 +663,10 @@ def proyectar_props_jugador(
     factor_min = mins_proy / minutos_base
     factor_def = float(def_rating_rival) / 115.0
 
-    # 1. Cálculo de Medias Esperadas (λ_PTS, λ_REB, λ_AST)
     lambda_pts = max(0.5, ppg_base * factor_min * factor_pace * factor_def)
     lambda_reb = max(0.3, rpg_base * factor_min * factor_pace)
     lambda_ast = max(0.3, apg_base * factor_min * factor_pace * factor_def)
 
-    # Líneas de mercado por defecto (o personalizadas si se pasan en lineas_mercado / jugador_dict)
     lineas_in = lineas_mercado or {}
     cuotas_in = cuotas_mercado or {}
 
@@ -537,7 +693,6 @@ def proyectar_props_jugador(
     cuota_reb = float(cuotas_in.get("REB", jugador_dict.get("Cuota_REB", 1.91)))
     cuota_ast = float(cuotas_in.get("AST", jugador_dict.get("Cuota_AST", 1.91)))
 
-    # 2. Auditoría Poisson +EV para cada uno de los 3 mercados
     eval_pts = evaluar_mercado_prop_poisson("PTS", lambda_pts, linea_pts, cuota_over_decimal=cuota_pts)
     eval_reb = evaluar_mercado_prop_poisson("REB", lambda_reb, linea_reb, cuota_over_decimal=cuota_reb)
     eval_ast = evaluar_mercado_prop_poisson("AST", lambda_ast, linea_ast, cuota_over_decimal=cuota_ast)
@@ -728,8 +883,7 @@ def generar_dataframe_plantilla_excel(
 ) -> pd.DataFrame:
     """
     Consolida en un solo DataFrame plano la información de los 30 equipos para exportar a Excel (.xlsx).
-    Incluye tanto las columnas operativas como las métricas base ('Minutos_Base', 'PPG_Base', 'RPG_Base', 'APG_Base')
-    para proyectar Puntos, Rebotes y Asistencias.
+    Incluye tanto las columnas operativas como las métricas base ('Minutos_Base', 'PPG_Base', 'RPG_Base', 'APG_Base').
     """
     if df_teams is None:
         if (st is not None and hasattr(st, "session_state")) and "df_nba" in st.session_state:
@@ -937,14 +1091,25 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
 def construir_excel_plantilla_bytes(
     lineups_dict: Optional[Dict[str, pd.DataFrame]] = None,
     df_teams: Optional[pd.DataFrame] = None,
+    historial_calibracion: Optional[List[Dict[str, Any]]] = None,
 ) -> bytes:
     """
     Convierte el DataFrame de `generar_dataframe_plantilla_excel()` a formato Excel binario (.xlsx)
-    en memoria usando `io.BytesIO()` y `openpyxl`, aplicando formato institucional de tabla.
+    en memoria usando `io.BytesIO()` y `openpyxl`, incluyendo:
+      - Hoja 1 (`Rosters_NBA_30`): Plantilla plana de rosters y métricas individuales calibradas.
+      - Hoja 2 (`Ratings_Equipos_Calibrados`): Tabla de las 30 franquicias con Pace, Off_Rtg y Def_Rtg actuales.
+      - Hoja 3 (`Bitacora_Auditoria_Kalman`, opcional si existen calibraciones): Historial de residuales post-partido.
     """
     df_plantilla = generar_dataframe_plantilla_excel(lineups_dict=lineups_dict, df_teams=df_teams)
+    if df_teams is None:
+        if (st is not None and hasattr(st, "session_state")) and "df_nba" in st.session_state:
+            df_teams = st.session_state.df_nba
+        else:
+            df_teams = pd.DataFrame(DEFAULT_CSV_DATA)
+
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        # Hoja 1: Rosters_NBA_30 (compatible directamente con st.file_uploader)
         df_plantilla.to_excel(writer, index=False, sheet_name="Rosters_NBA_30")
         ws = writer.sheets["Rosters_NBA_30"]
         ws.views.sheetView[0].showGridLines = True
@@ -988,6 +1153,32 @@ def construir_excel_plantilla_bytes(
         }
         for col_letter, width in col_widths.items():
             ws.column_dimensions[col_letter].width = width
+
+        # Hoja 2: Ratings_Equipos_Calibrados
+        team_export_cols = [
+            c for c in ["Team_Abbr", "Team", "Conference", "Division", "Pace", "Off_Rtg", "Def_Rtg", "Star1_Name", "Star1_PPG", "Star2_Name", "Star2_PPG"]
+            if c in df_teams.columns
+        ]
+        df_teams[team_export_cols].to_excel(writer, index=False, sheet_name="Ratings_Equipos_Calibrados")
+        ws_t = writer.sheets["Ratings_Equipos_Calibrados"]
+        ws_t.views.sheetView[0].showGridLines = True
+        ws_t.freeze_panes = "A2"
+        for col_idx in range(1, len(team_export_cols) + 1):
+            c = ws_t.cell(row=1, column=col_idx)
+            c.fill = header_fill
+            c.font = header_font
+
+        # Hoja 3: Bitacora_Auditoria_Kalman (si hay registros)
+        if historial_calibracion:
+            df_hist = pd.DataFrame(historial_calibracion)
+            df_hist.to_excel(writer, index=False, sheet_name="Bitacora_Auditoria_Kalman")
+            ws_h = writer.sheets["Bitacora_Auditoria_Kalman"]
+            ws_h.views.sheetView[0].showGridLines = True
+            ws_h.freeze_panes = "A2"
+            for col_idx in range(1, len(df_hist.columns) + 1):
+                c = ws_h.cell(row=1, column=col_idx)
+                c.fill = header_fill
+                c.font = header_font
 
     buffer.seek(0)
     return buffer.getvalue()
@@ -1055,7 +1246,7 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
 def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
     """
     Actualiza dinámicamente Off_Rtg, Def_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
-    de la fila del equipo a partir de su quinteto en sesión (incluyendo `PPG_Base`, `RPG_Base`, `APG_Base`, `Minutos_Base`).
+    de la fila del equipo a partir de su quinteto en sesión.
     """
     updated = team_row.copy()
     t_abbr = str(team_row["Team_Abbr"]).strip().upper()

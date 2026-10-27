@@ -254,7 +254,6 @@ def convertir_americano_a_decimal(momio: Any, default_decimal: float = 1.91) -> 
     if np.isnan(val) or val == 0.0:
         return round(float(default_decimal), 2)
 
-    # Si ya es cuota decimal europea (ej. 1.91, 2.15)
     if 1.01 <= val < 25.0:
         return round(val, 2)
 
@@ -293,6 +292,54 @@ def _formatear_hora_partido(iso_date_str: str, short_detail: str) -> str:
     return short_detail or "TBD"
 
 
+def _extraer_posesiones_boxscore_competitor(team_entry: Dict[str, Any]) -> Optional[float]:
+    """
+    Intenta calcular las posesiones reales de un equipo a partir de las estadísticas
+    de boxscore incluidas en el bloque `competitors[i].statistics` de ESPN:
+        Poss = 0.96 * (FGA - ORB + TOV + 0.44 * FTA)
+    Retorna None si el endpoint de scoreboard no desglosa esos campos.
+    """
+    stats_list = team_entry.get("statistics", [])
+    if not isinstance(stats_list, list) or not stats_list:
+        return None
+
+    stat_map: Dict[str, float] = {}
+    for st_item in stats_list:
+        if not isinstance(st_item, dict):
+            continue
+        name = str(st_item.get("name", st_item.get("abbreviation", ""))).strip().upper()
+        val_raw = st_item.get("displayValue", st_item.get("value"))
+        if val_raw is None:
+            continue
+        # Manejar formato "42-88" en FG o FT
+        if isinstance(val_raw, str) and "-" in val_raw:
+            parts = val_raw.split("-")
+            if len(parts) == 2:
+                try:
+                    made = float(parts[0])
+                    att = float(parts[1])
+                    stat_map[f"{name}_MADE"] = made
+                    stat_map[f"{name}_ATT"] = att
+                except ValueError:
+                    pass
+        else:
+            try:
+                stat_map[name] = float(val_raw)
+            except (TypeError, ValueError):
+                pass
+
+    fga = stat_map.get("FIELDGOALSATTEMPTED") or stat_map.get("FGA") or stat_map.get("FG_ATT")
+    fta = stat_map.get("FREETHROWSATTEMPTED") or stat_map.get("FTA") or stat_map.get("FT_ATT")
+    orb = stat_map.get("OFFENSIVEREBOUNDS") or stat_map.get("OREB") or stat_map.get("ORB") or 10.5
+    tov = stat_map.get("TURNOVERS") or stat_map.get("TO") or stat_map.get("TOV") or 13.5
+
+    if fga is not None and fta is not None and fga > 40:
+        poss = 0.96 * (float(fga) - float(orb) + float(tov) + 0.44 * float(fta))
+        if 82.0 <= poss <= 122.0:
+            return round(poss, 1)
+    return None
+
+
 def _extraer_odds_desde_evento_espn(
     comp: Dict[str, Any], away_abbr: str, home_abbr: str
 ) -> Optional[Dict[str, Any]]:
@@ -316,7 +363,6 @@ def _extraer_odds_desde_evento_espn(
     if odds_obj is None:
         return None
 
-    # 1. Total de mercado (Over/Under)
     total_mercado: Optional[float] = None
     if odds_obj.get("overUnder") is not None:
         try:
@@ -324,7 +370,6 @@ def _extraer_odds_desde_evento_espn(
         except (TypeError, ValueError):
             total_mercado = None
 
-    # Cuotas Over / Under en ESPN (pueden venir en overOdds / underOdds o total.over / total.under)
     raw_over_odds = odds_obj.get("overOdds")
     raw_under_odds = odds_obj.get("underOdds")
     total_nested = odds_obj.get("total", {}) if isinstance(odds_obj.get("total"), dict) else {}
@@ -336,11 +381,9 @@ def _extraer_odds_desde_evento_espn(
     cuota_over_decimal = convertir_americano_a_decimal(raw_over_odds, default_decimal=1.91)
     cuota_under_decimal = convertir_americano_a_decimal(raw_under_odds, default_decimal=1.91)
 
-    # 2. Spread del equipo Local (spread_mercado_home)
     spread_mercado_home: Optional[float] = None
     details_str = str(odds_obj.get("details", "")).strip().upper()
     if details_str:
-        # Ejemplo details: "BOS -6.5" o "NY +4.5" o "EVEN"
         if details_str in {"EVEN", "PK", "PICK"}:
             spread_mercado_home = 0.0
         else:
@@ -430,10 +473,8 @@ def obtener_lineas_mercado_nba(
        - URL: 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds/'
        - Parámetros: 'regions=us', 'markets=totals,spreads', 'oddsFormat=decimal'
     2. Extrae por cada partido programado:
-       - 'total_mercado': línea de puntos O/U (ej. 228.5).
-       - 'cuota_over_decimal' y 'cuota_under_decimal' (ej. 1.91 / 1.91).
-       - 'spread_mercado_home': línea de hándicap del local (ej. -4.5 o +3.5).
-       - 'cuota_spread_home_decimal' y 'cuota_spread_away_decimal' (ej. 1.93 / 1.88).
+       - 'total_mercado', 'cuota_over_decimal', 'cuota_under_decimal'
+       - 'spread_mercado_home', 'cuota_spread_home_decimal', 'cuota_spread_away_decimal'
     3. Normaliza las abreviaturas de las 30 franquicias (GSW, NYK, SAS, NOP, etc.).
     4. Módulo Fallback de Respaldo: Si no se pasa API key o falla la llamada, extrae las líneas
        de consenso directamente del endpoint público de ESPN Scoreboard ('competitions[0].odds')
@@ -442,9 +483,6 @@ def obtener_lineas_mercado_nba(
     lineas_por_partido: Dict[str, Dict[str, Any]] = {}
     clean_key = str(api_key).strip() if api_key else ""
 
-    # --------------------------------------------------------------------------
-    # A. INTENTO PRIMARIO: THE ODDS API (SI SE PROPORCIONA API KEY)
-    # --------------------------------------------------------------------------
     if clean_key:
         params = {
             "apiKey": clean_key,
@@ -479,7 +517,6 @@ def obtener_lineas_mercado_nba(
                     cuota_sp_away_dec: float = 1.91
                     book_title: str = "US Sportsbook"
 
-                    # Priorizar casas sharp/líderes si están disponibles (Pinnacle, DraftKings, FanDuel, BetMGM)
                     preferred_keys = {"pinnacle", "draftkings", "fanduel", "betmgm", "caesars", "bovada"}
                     sorted_books = sorted(
                         bookmakers,
@@ -552,12 +589,8 @@ def obtener_lineas_mercado_nba(
                             "fuente": f"The Odds API ({book_title})",
                         }
         except Exception:
-            # Si falla la llamada a The Odds API, continúa silenciosamente al Fallback de ESPN
             pass
 
-    # --------------------------------------------------------------------------
-    # B. MÓDULO FALLBACK DE RESPALDO: ESPN SCOREBOARD ('competitions[0].odds')
-    # --------------------------------------------------------------------------
     payload_espn = _consultar_espn_scoreboard_raw(fecha_yyyymmdd=fecha_yyyymmdd)
     if isinstance(payload_espn, dict):
         for ev in payload_espn.get("events", []):
@@ -589,7 +622,6 @@ def obtener_lineas_mercado_nba(
                 if matchup_key not in lineas_por_partido:
                     lineas_por_partido[matchup_key] = espn_odds
                 else:
-                    # Completar campos faltantes si The Odds API devolvió solo uno de los mercados
                     existing = lineas_por_partido[matchup_key]
                     if existing.get("total_mercado") is None and espn_odds.get("total_mercado") is not None:
                         existing["total_mercado"] = espn_odds["total_mercado"]
@@ -609,7 +641,11 @@ def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dic
     """
     Consulta el endpoint público de ESPN Scoreboard:
     https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard
-    Extrae y parsea los partidos de la fecha en curso incluyendo cualquier línea de consenso en `competitions[0].odds`.
+    Extrae y parsea los partidos de la fecha indicada:
+      - Si el status es 'STATUS_FINAL' o 'Final' (o state == 'post'):
+        * Extrae 'score_away_real' y 'score_home_real'.
+        * Calcula 'pace_real' desde las estadísticas de posesiones del boxscore o vía `(puntos_totales) / 2.25`.
+        * Marca la bandera `'finalizado': True`.
     """
     payload = _consultar_espn_scoreboard_raw(fecha_yyyymmdd=fecha_yyyymmdd)
     if not isinstance(payload, dict):
@@ -629,19 +665,36 @@ def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dic
             home_abbr_raw = ""
             away_name = ""
             home_name = ""
+            away_score_raw: Optional[float] = None
+            home_score_raw: Optional[float] = None
+            away_poss_box: Optional[float] = None
+            home_poss_box: Optional[float] = None
 
             for team_entry in competitors:
                 side = str(team_entry.get("homeAway", "")).lower()
                 team_obj = team_entry.get("team", {})
                 abbr_val = str(team_obj.get("abbreviation", "")).strip().upper()
                 disp_name = str(team_obj.get("displayName", team_obj.get("name", abbr_val))).strip()
+                score_val = team_entry.get("score")
+                parsed_score: Optional[float] = None
+                if score_val is not None and str(score_val).strip() != "":
+                    try:
+                        parsed_score = float(score_val)
+                    except (TypeError, ValueError):
+                        parsed_score = None
+
+                poss_est = _extraer_posesiones_boxscore_competitor(team_entry)
 
                 if side == "away":
                     away_abbr_raw = abbr_val
                     away_name = disp_name
+                    away_score_raw = parsed_score
+                    away_poss_box = poss_est
                 elif side == "home":
                     home_abbr_raw = abbr_val
                     home_name = disp_name
+                    home_score_raw = parsed_score
+                    home_poss_box = poss_est
 
             if not away_abbr_raw and len(competitors) >= 2:
                 away_abbr_raw = str(competitors[1].get("team", {}).get("abbreviation", "")).upper()
@@ -659,19 +712,44 @@ def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dic
 
             status_obj = comp.get("status", ev.get("status", {})) or {}
             status_type = status_obj.get("type", {}) or {}
+            status_name = str(status_type.get("name", "")).strip().upper()
             short_detail = str(status_type.get("shortDetail", "")).strip()
             description = str(status_type.get("description", "Scheduled")).strip()
             state_code = str(status_type.get("state", "pre")).lower()
+            completed_flag = bool(status_type.get("completed", False))
 
             iso_date = str(comp.get("date") or ev.get("date") or "").strip()
             hora_formateada = _formatear_hora_partido(iso_date, short_detail)
 
-            if state_code == "in":
+            es_final = (
+                status_name == "STATUS_FINAL"
+                or description.lower().startswith("final")
+                or short_detail.lower().startswith("final")
+                or state_code == "post"
+                or completed_flag
+            )
+
+            if state_code == "in" and not es_final:
                 estado_partido = f"EN VIVO ({short_detail})" if short_detail else "EN VIVO"
-            elif state_code == "post":
-                estado_partido = short_detail or "FINAL"
+            elif es_final:
+                estado_partido = short_detail or "Final"
             else:
                 estado_partido = description if description else "Programado"
+
+            score_away_real = float(away_score_raw) if away_score_raw is not None else 0.0
+            score_home_real = float(home_score_raw) if home_score_raw is not None else 0.0
+            puntos_totales_real = score_away_real + score_home_real
+
+            if away_poss_box is not None and home_poss_box is not None:
+                pace_real = round((away_poss_box + home_poss_box) / 2.0, 1)
+            elif away_poss_box is not None:
+                pace_real = round(away_poss_box, 1)
+            elif home_poss_box is not None:
+                pace_real = round(home_poss_box, 1)
+            elif puntos_totales_real > 0:
+                pace_real = round(puntos_totales_real / 2.25, 1)
+            else:
+                pace_real = 99.0
 
             espn_odds = _extraer_odds_desde_evento_espn(comp, away_abbr, home_abbr)
 
@@ -682,6 +760,11 @@ def obtener_calendario_nba_hoy(fecha_yyyymmdd: Optional[str] = None) -> List[Dic
                 "home_abbr": home_abbr,
                 "hora": hora_formateada,
                 "estado": estado_partido,
+                "status_name": status_name or ("STATUS_FINAL" if es_final else "STATUS_SCHEDULED"),
+                "finalizado": bool(es_final and puntos_totales_real > 0),
+                "score_away_real": round(score_away_real, 1),
+                "score_home_real": round(score_home_real, 1),
+                "pace_real": round(pace_real, 1),
             }
             if espn_odds:
                 item_cal.update(espn_odds)

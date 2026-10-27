@@ -1,6 +1,8 @@
+from datetime import date, timedelta
 import hashlib
 import io
 from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -23,7 +25,9 @@ from engine_nba import (
     GAME_SLATE_TIMES,
     LINEUP_COLS,
     ROSTER_EDITOR_COLS,
+    auditar_partido_nba,
     build_default_lineups_dict,
+    calibrar_ratings_nba,
     calcular_ratings_lineup,
     construir_excel_plantilla_bytes,
     evaluar_valor_spread_nba,
@@ -92,12 +96,7 @@ def render_executive_radar(radar: Dict, games_count: int, n_sims: int) -> None:
 
 
 def _construir_badge_totales_html(audit_tot: Dict[str, Any]) -> str:
-    """
-    Construye el badge visual de Totales en formato estrictamente DECIMAL:
-      - Verde neón (#00ff88): [⚡ VALOR: OVER 226.5 @ 1.91 (+4.5 pts Edge | +7.8% EV)]
-      - Magenta/Rojo (#ff3366): [⚡ VALOR: UNDER 232.0 @ 1.95 (+3.8 pts Edge | +5.9% EV)]
-      - Gris (#555555): [TOTAL EFICIENTE]
-    """
+    """Construye el badge visual de Totales en formato estrictamente DECIMAL."""
     if audit_tot.get("valor"):
         pick = audit_tot["pick"]
         linea = float(audit_tot["linea"])
@@ -118,11 +117,7 @@ def _construir_badge_totales_html(audit_tot: Dict[str, Any]) -> str:
 
 
 def _construir_badge_spread_html(audit_sp: Dict[str, Any]) -> str:
-    """
-    Construye el badge visual de Hándicap / Spread en formato estrictamente DECIMAL:
-      - Cyan (#00e5ff): [⚡ VALOR SPREAD: NYK +6.5 @ 1.92 (+4.1 pts Edge | +8.3% EV)]
-      - Gris (#555555): [SPREAD EFICIENTE]
-    """
+    """Construye el badge visual de Hándicap / Spread en formato estrictamente DECIMAL."""
     if audit_sp.get("valor"):
         pick_label = str(audit_sp["pick"])
         cuota = float(audit_sp["cuota"])
@@ -141,12 +136,7 @@ def _construir_badge_spread_html(audit_sp: Dict[str, Any]) -> str:
 
 
 def _construir_badge_prop_html(eval_mkt: Dict[str, Any]) -> str:
-    """
-    Construye el badge visual de Player Prop (PTS, REB, AST) evaluado por Poisson (+EV >= 5%):
-      - Verde neón (#00ff88): [⚡ VALOR: OVER X.X @ Cuota (+EV%)]
-      - Magenta/Rojo (#ff3366): [⚡ VALOR: UNDER X.X @ Cuota (+EV%)]
-      - Gris (#555555): [LÍNEA JUSTA]
-    """
+    """Construye el badge visual de Player Prop (PTS, REB, AST) evaluado por Poisson (+EV >= 5%)."""
     badge_txt = str(eval_mkt.get("badge", "[LÍNEA JUSTA]"))
     if eval_mkt.get("valor"):
         pick = str(eval_mkt.get("pick", "OVER"))
@@ -169,13 +159,7 @@ def render_slate_grid_3x3(
 ) -> None:
     """
     VISTA A: CARTELERA EN CUADRÍCULA (Grid de 3 Columnas)
-    Renderiza para cada partido un contenedor Cyber-Quant con:
-      - Marcador proyectado por Monte Carlo y escudos oficiales de ESPN.
-      - Comparativa de Totales: Sportsbook vs. Modelo con cuota decimal (ej. O/U 226.5 @ 1.91).
-      - Badge visual de Totales (+EV Over en verde neón, +EV Under en magenta/rojo, o Gris [TOTAL EFICIENTE]).
-      - Comparativa de Hándicap: Sportsbook vs. Modelo con cuota decimal (ej. BOS -6.5 @ 1.92).
-      - Badge visual de Hándicap (+EV Spread en cyan o Gris [SPREAD EFICIENTE]).
-      - Botón 'LEER ANÁLISIS →' con persistencia mediante st.session_state y st.rerun().
+    Renderiza para cada partido un contenedor Cyber-Quant con auditoría de Totales y Hándicap en formato decimal.
     """
     st.markdown(
         f'<div class="section-banner"><div class="section-banner-title">🗓️ CARTELERA NBA EN CUADRÍCULA // {len(sim_results)} JUEGO(S) AUDITADOS EN DECIMAL</div>'
@@ -366,14 +350,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
 
 def render_player_props_dossier_section(res: Dict) -> None:
     """
-    SECCIÓN ACTUALIZADA DE PLAYER PROPS EN EL EXPEDIENTE DETALLADO (VISTA B):
-    Para cada jugador estrella del cruce:
-      - Muestra una tarjeta interactiva dividida en 3 columnas (PUNTOS, REBOTES, ASISTENCIAS):
-        * PUNTOS: Proyección Modelo (λ_PTS) | Línea Sportsbook (con cuota decimal) | Badge +EV
-        * REBOTES: Proyección Modelo (λ_REB) | Línea Sportsbook (con cuota decimal) | Badge +EV
-        * ASISTENCIAS: Proyección Modelo (λ_AST) | Línea Sportsbook (con cuota decimal) | Badge +EV
-      - Incluye campos editables para ingresar la línea del sportsbook (ej. Línea REB: 6.5, Cuota: 1.91)
-        con recálculo instantáneo mediante `proyectar_props_jugador`.
+    SECCIÓN DE PLAYER PROPS MULTIMERCADO (PTS, REB, AST) EN EL EXPEDIENTE DETALLADO (VISTA B).
     """
     st.markdown(
         '<div class="row-label-bar" style="border-left-color: #8B5CF6;">'
@@ -392,7 +369,6 @@ def render_player_props_dossier_section(res: Dict) -> None:
         style_tag = str(prop["style"])
         opp_def_rtg = float(prop.get("opp_def_rtg", 115.0))
 
-        # Recuperar las métricas base y minutos actuales desde la sesión (por si el usuario editó minutos en la tabla de arriba)
         lu_team_df = obtener_lineup_en_sesion(t_abbr)
         player_match = lu_team_df[lu_team_df["Jugador"].astype(str).str.lower() == p_name.lower()]
 
@@ -456,7 +432,7 @@ def render_player_props_dossier_section(res: Dict) -> None:
                 )
             with in_c2:
                 cuota_pts = st.number_input(
-                    f"Cuota PTS (Dec)",
+                    "Cuota PTS (Dec)",
                     min_value=1.05,
                     max_value=10.00,
                     value=1.91,
@@ -479,7 +455,7 @@ def render_player_props_dossier_section(res: Dict) -> None:
                 )
             with in_r2:
                 cuota_reb = st.number_input(
-                    f"Cuota REB (Dec)",
+                    "Cuota REB (Dec)",
                     min_value=1.05,
                     max_value=10.00,
                     value=1.91,
@@ -502,7 +478,7 @@ def render_player_props_dossier_section(res: Dict) -> None:
                 )
             with in_a2:
                 cuota_ast = st.number_input(
-                    f"Cuota AST (Dec)",
+                    "Cuota AST (Dec)",
                     min_value=1.05,
                     max_value=10.00,
                     value=1.91,
@@ -511,7 +487,6 @@ def render_player_props_dossier_section(res: Dict) -> None:
                     key=f"{key_base}_ast_odd",
                 )
 
-        # Ejecutar motor cuantitativo de proyección y Poisson +EV con los inputs actuales
         jugador_payload = {
             "Jugador": p_name,
             "Team_Abbr": t_abbr,
@@ -730,8 +705,343 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
             unsafe_allow_html=True,
         )
 
-    # Renderizar Fila 4: Player Props Multimercado (PTS, REB, AST) con inputs en vivo
     render_player_props_dossier_section(res)
+
+
+def _construir_partidos_finalizados_para_auditoria(
+    df_teams: pd.DataFrame,
+    calendario_espn: List[Dict[str, Any]],
+    n_sims: int,
+    hfa_pts: float,
+    base_seed: int,
+) -> Tuple[List[Tuple[Dict[str, Any], Dict[str, Any]]], bool]:
+    """
+    Reúne todos los partidos con `'finalizado': True` desde ESPN Scoreboard y calcula su proyección previa.
+    Si el calendario en curso de ESPN aún no tiene partidos finalizados (ej. antes del inicio de la jornada),
+    genera resultados finales realistas sobre los cruces activos para permitir auditar y calibrar en cualquier momento.
+    Retorna `(lista_pares_(proyeccion, resultado_real), es_simulacion_demo)`.
+    """
+    finalizados_espn = [ev for ev in calendario_espn if ev.get("finalizado")]
+    pares_auditoria: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+
+    if finalizados_espn:
+        for idx, ev in enumerate(finalizados_espn):
+            a_abbr = str(ev["away_abbr"]).upper()
+            h_abbr = str(ev["home_abbr"]).upper()
+            a_df = df_teams[df_teams["Team_Abbr"].astype(str).str.upper() == a_abbr]
+            h_df = df_teams[df_teams["Team_Abbr"].astype(str).str.upper() == h_abbr]
+            if a_df.empty or h_df.empty:
+                continue
+
+            away_lu = obtener_lineup_en_sesion(a_abbr)
+            home_lu = obtener_lineup_en_sesion(h_abbr)
+            proy = run_monte_carlo_matchup(
+                away_row_raw=a_df.iloc[0],
+                home_row_raw=h_df.iloc[0],
+                away_lineup=away_lu,
+                home_lineup=home_lu,
+                n_sims=n_sims,
+                hfa_pts=hfa_pts,
+                seed=int(base_seed) + idx * 101,
+            )
+            pares_auditoria.append((proy, ev))
+        if pares_auditoria:
+            return pares_auditoria, False
+
+    # Respaldo de Cierre de Jornada cuando ESPN aún no reporta juegos 'STATUS_FINAL'
+    active_pairs = list(st.session_state.get("active_matchups", FULL_30_TEAM_SLATE[:6]))[:6]
+    rng_demo = np.random.default_rng(int(base_seed) + 777)
+
+    for idx, (away_name, home_name) in enumerate(active_pairs):
+        a_df = df_teams[df_teams["Team"] == away_name]
+        h_df = df_teams[df_teams["Team"] == home_name]
+        if a_df.empty or h_df.empty:
+            continue
+        a_row = a_df.iloc[0]
+        h_row = h_df.iloc[0]
+        a_abbr = str(a_row["Team_Abbr"]).upper()
+        h_abbr = str(h_row["Team_Abbr"]).upper()
+
+        away_lu = obtener_lineup_en_sesion(a_abbr)
+        home_lu = obtener_lineup_en_sesion(h_abbr)
+        proy = run_monte_carlo_matchup(
+            away_row_raw=a_row,
+            home_row_raw=h_row,
+            away_lineup=away_lu,
+            home_lineup=home_lu,
+            n_sims=n_sims,
+            hfa_pts=hfa_pts,
+            seed=int(base_seed) + idx * 101,
+        )
+
+        # Generar u obtener marcador real guardado en sesión para este cruce
+        custom_scores = st.session_state.get("custom_final_scores", {})
+        match_key = f"{a_abbr}@{h_abbr}"
+        if match_key in custom_scores:
+            s_away, s_home, p_real = custom_scores[match_key]
+        else:
+            s_away = float(int(round(proy["exp_away_pts"] + rng_demo.normal(0.0, 6.5))))
+            s_home = float(int(round(proy["exp_home_pts"] + rng_demo.normal(0.0, 6.5))))
+            if s_away == s_home:
+                s_home += 2.0
+            p_real = round((s_away + s_home) / 2.25, 1)
+
+        ev_sim = {
+            "id_partido": f"FINAL_{idx}_{a_abbr}_{h_abbr}",
+            "nombre": f"{away_name} at {home_name}",
+            "away_abbr": a_abbr,
+            "home_abbr": h_abbr,
+            "hora": "FINAL",
+            "estado": "Final (STATUS_FINAL)",
+            "status_name": "STATUS_FINAL",
+            "finalizado": True,
+            "score_away_real": s_away,
+            "score_home_real": s_home,
+            "pace_real": p_real,
+        }
+        pares_auditoria.append((proy, ev_sim))
+
+    return pares_auditoria, True
+
+
+def render_post_game_audit_tab(
+    df_teams: pd.DataFrame,
+    n_sims: int,
+    hfa_pts: float,
+    base_seed: int,
+) -> None:
+    """
+    PESTAÑA 2: 📈 AUDITORÍA POST-PARTIDO & CALIBRACIÓN ADAPTATIVA (FILTRO KALMAN)
+    - Muestra tarjetas comparativas (Marcador Real vs. Proyección Previa del Modelo, Desviación de Spread y Total).
+    - Incluye controles para consultar otra fecha de ESPN o ajustar marcadores reales en vivo.
+    - Incluye el botón principal "⚡ Calibrar Todos los Partidos Finalizados" que actualiza `st.session_state.df_nba` y ejecuta `st.rerun()`.
+    """
+    st.markdown(
+        '<div class="section-banner">'
+        '<div class="section-banner-title">📈 AUDITORÍA POST-PARTIDO &amp; CALIBRACIÓN ADAPTATIVA (FILTRO KALMAN)</div>'
+        '<div class="section-banner-tag">FEEDBACK LOOP &bull; AJUSTE DINÁMICO DE PACE, OFF_RTG Y DEF_RTG</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    ctrl_c1, ctrl_c2, ctrl_c3 = st.columns([1.5, 1.3, 1.4])
+    with ctrl_c1:
+        fecha_audit = st.date_input(
+            "📅 Fecha de Jornada a Auditar (ESPN Scoreboard)",
+            value=st.session_state.get("fecha_auditoria_date", date.today() - timedelta(days=1)),
+            key="date_picker_audit",
+        )
+    with ctrl_c2:
+        learning_rate = st.slider(
+            "⚡ Ganancia Kalman (Learning Rate α)",
+            min_value=0.02,
+            max_value=0.25,
+            value=0.08,
+            step=0.01,
+            help="Controla qué porcentaje del residual post-partido se transfiere a los ratings base de Pace, Off_Rtg y Def_Rtg.",
+        )
+    with ctrl_c3:
+        st.write("")
+        if st.button("🔍 Consultar Finalizados ESPN en Fecha", use_container_width=True):
+            fecha_str = fecha_audit.strftime("%Y%m%d")
+            st.session_state.fecha_auditoria_date = fecha_audit
+            st.session_state.calendario_auditoria_nba = obtener_calendario_nba_hoy(fecha_yyyymmdd=fecha_str)
+            st.rerun()
+
+    calendario_fuente = st.session_state.get("calendario_auditoria_nba") or st.session_state.get("calendario_nba", [])
+    pares_auditoria, es_modo_demo = _construir_partidos_finalizados_para_auditoria(
+        df_teams=df_teams,
+        calendario_espn=calendario_fuente,
+        n_sims=n_sims,
+        hfa_pts=hfa_pts,
+        base_seed=base_seed,
+    )
+
+    if es_modo_demo:
+        st.caption(
+            "ℹ️ Actualmente no hay partidos con estado `STATUS_FINAL` en la fecha consultada de ESPN. "
+            "Se muestran los cruces activos en modo de Cierre de Jornada (puedes editar cualquier marcador real antes de calibrar)."
+        )
+    else:
+        st.caption(
+            f"✅ Mostrando {len(pares_auditoria)} partido(s) oficial(es) con estado `STATUS_FINAL` extraídos desde ESPN Scoreboard."
+        )
+
+    # Calcular auditorías de todos los partidos finalizados
+    lista_auditorias: List[Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
+
+    for idx_start in range(0, len(pares_auditoria), 2):
+        row_cols = st.columns(2)
+        slice_pares = pares_auditoria[idx_start : idx_start + 2]
+
+        for c_i, (proy, ev_real) in enumerate(slice_pares):
+            g_idx = idx_start + c_i
+            a_abbr = proy["away_abbr"]
+            h_abbr = proy["home_abbr"]
+            match_key = f"{a_abbr}@{h_abbr}"
+
+            with row_cols[c_i]:
+                with st.expander(f"✏️ Ajustar Marcador Final Manual ({a_abbr} @ {h_abbr})", expanded=False):
+                    sc_c1, sc_c2, sc_c3 = st.columns(3)
+                    with sc_c1:
+                        in_away = st.number_input(
+                            f"Pts {a_abbr} (Real)",
+                            min_value=60.0,
+                            max_value=180.0,
+                            value=float(ev_real["score_away_real"]),
+                            step=1.0,
+                            key=f"aud_in_away_{g_idx}_{match_key}",
+                        )
+                    with sc_c2:
+                        in_home = st.number_input(
+                            f"Pts {h_abbr} (Real)",
+                            min_value=60.0,
+                            max_value=180.0,
+                            value=float(ev_real["score_home_real"]),
+                            step=1.0,
+                            key=f"aud_in_home_{g_idx}_{match_key}",
+                        )
+                    with sc_c3:
+                        default_pace_calc = round((in_away + in_home) / 2.25, 1)
+                        in_pace = st.number_input(
+                            "Pace Real",
+                            min_value=82.0,
+                            max_value=120.0,
+                            value=float(default_pace_calc),
+                            step=0.5,
+                            key=f"aud_in_pace_{g_idx}_{match_key}",
+                        )
+                    ev_real_activo = dict(ev_real)
+                    ev_real_activo["score_away_real"] = in_away
+                    ev_real_activo["score_home_real"] = in_home
+                    ev_real_activo["pace_real"] = in_pace
+                    st.session_state.custom_final_scores[match_key] = (in_away, in_home, in_pace)
+
+                aud = auditar_partido_nba(proyeccion=proy, resultado_real=ev_real_activo)
+                lista_auditorias.append((proy, ev_real_activo, aud))
+
+                winner_badge_color = "#00ff88" if aud["acierto_ganador"] else "#ff3366"
+                winner_badge_text = "WIN PICK ACERTADO" if aud["acierto_ganador"] else "UPSET / SORPRESA"
+
+                sp_proy_str = f"{h_abbr} {aud['proj_spread_home']:+.1f}"
+                sp_real_str = f"{h_abbr} {aud['spread_real_home']:+.1f}"
+
+                st.markdown(
+                    f"""
+                    <div class="kalman-audit-card">
+                        <div class="grid-card-top">
+                            <span class="grid-league-badge">STATUS_FINAL &bull; {a_abbr} @ {h_abbr}</span>
+                            <span style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; font-weight:800; color:{winner_badge_color};">
+                                [{winner_badge_text}]
+                            </span>
+                        </div>
+                        <div class="kalman-score-strip">
+                            <div>
+                                <div style="font-size:0.68rem; color:#94A3B8;">MARCADOR REAL FINAL</div>
+                                <div style="font-size:1.10rem; font-weight:800; color:#F8FAFC; margin-top:2px;">
+                                    {escudo_nba_html(a_abbr, 24)}{a_abbr} {aud['score_away_real']:.0f} &nbsp;&mdash;&nbsp; {aud['score_home_real']:.0f} {h_abbr} {escudo_nba_html(h_abbr, 24)}
+                                </div>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="font-size:0.68rem; color:#94A3B8;">PROYECCIÓN PREVIA MODELO</div>
+                                <div style="font-size:1.02rem; font-weight:700; color:#00F5D4; margin-top:2px;">
+                                    {a_abbr} {aud['exp_away_pts']:.1f} &nbsp;&mdash;&nbsp; {aud['exp_home_pts']:.1f} {h_abbr}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="audit-market-row">
+                            <span class="audit-market-label">Spread (Real vs Modelo):</span>
+                            <span class="audit-market-val">{sp_real_str} vs {sp_proy_str} (Error: {aud['Error_Spread']:+.1f} pts)</span>
+                        </div>
+                        <div class="audit-market-row">
+                            <span class="audit-market-label">Total Puntos (Real vs Modelo):</span>
+                            <span class="audit-market-val">{aud['total_real']:.0f} vs {aud['exp_total_pts']:.1f} (Error: {aud['Error_Total']:+.1f} pts)</span>
+                        </div>
+                        <div class="audit-market-row">
+                            <span class="audit-market-label">Pace Posesiones (Real vs Modelo):</span>
+                            <span class="audit-market-val">{aud['pace_real']:.1f} vs {aud['exp_pace']:.1f} (Error: {aud['Error_Pace']:+.1f} pos)</span>
+                        </div>
+                        <div class="kalman-residual-grid">
+                            <div class="kalman-residual-box">
+                                <div class="kalman-residual-title">RESIDUAL {a_abbr} (PTS)</div>
+                                <div class="kalman-residual-val" style="color:{'#00F5D4' if aud['Error_Away']>=0 else '#F43F5E'};">{aud['Error_Away']:+.1f}</div>
+                            </div>
+                            <div class="kalman-residual-box">
+                                <div class="kalman-residual-title">RESIDUAL {h_abbr} (PTS)</div>
+                                <div class="kalman-residual-val" style="color:{'#00F5D4' if aud['Error_Home']>=0 else '#F43F5E'};">{aud['Error_Home']:+.1f}</div>
+                            </div>
+                            <div class="kalman-residual-box">
+                                <div class="kalman-residual-title">MAE PARTIDO</div>
+                                <div class="kalman-residual-val" style="color:#38BDF8;">{aud['mae_pts']:.1f} pts</div>
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    st.write("")
+    if st.button(
+        f"⚡ Calibrar Todos los Partidos Finalizados ({len(lista_auditorias)} Juegos | α = {learning_rate:.2f})",
+        type="primary",
+        use_container_width=True,
+    ):
+        df_actual = st.session_state.df_nba.copy()
+        nuevos_registros_hist: List[Dict[str, Any]] = []
+
+        for proy, _, aud in lista_auditorias:
+            a_abbr = aud["away_abbr"]
+            h_abbr = aud["home_abbr"]
+
+            a_before = df_actual[df_actual["Team_Abbr"] == a_abbr].iloc[0]
+            h_before = df_actual[df_actual["Team_Abbr"] == h_abbr].iloc[0]
+
+            df_actual = calibrar_ratings_nba(
+                df_equipos=df_actual,
+                away_abbr=a_abbr,
+                home_abbr=h_abbr,
+                auditoria=aud,
+                learning_rate=learning_rate,
+                lineups_dict=st.session_state.lineups_nba,
+            )
+
+            a_after = df_actual[df_actual["Team_Abbr"] == a_abbr].iloc[0]
+            h_after = df_actual[df_actual["Team_Abbr"] == h_abbr].iloc[0]
+
+            nuevos_registros_hist.append(
+                {
+                    "Partido": f"{a_abbr} @ {h_abbr}",
+                    "Marcador_Real": f"{aud['score_away_real']:.0f}-{aud['score_home_real']:.0f}",
+                    "Proy_Modelo": f"{aud['exp_away_pts']:.1f}-{aud['exp_home_pts']:.1f}",
+                    "Error_Spread": aud["Error_Spread"],
+                    "Error_Total": aud["Error_Total"],
+                    "Error_Pace": aud["Error_Pace"],
+                    f"{a_abbr}_OffRtg": f"{a_before['Off_Rtg']:.1f} -> {a_after['Off_Rtg']:.1f}",
+                    f"{a_abbr}_DefRtg": f"{a_before['Def_Rtg']:.1f} -> {a_after['Def_Rtg']:.1f}",
+                    f"{h_abbr}_OffRtg": f"{h_before['Off_Rtg']:.1f} -> {h_after['Off_Rtg']:.1f}",
+                    f"{h_abbr}_DefRtg": f"{h_before['Def_Rtg']:.1f} -> {h_after['Def_Rtg']:.1f}",
+                    "Pace_Ajustado": f"{a_after['Pace']:.1f} / {h_after['Pace']:.1f}",
+                }
+            )
+
+        st.session_state.df_nba = sincronizar_df_nba_con_lineups(df_actual, st.session_state.lineups_nba)
+        st.session_state.historial_calibracion = nuevos_registros_hist
+        st.session_state.calibracion_aplicada_ok = True
+        st.session_state.data_source_label = f"Kalman Calibrado ({len(nuevos_registros_hist)} partidos, α={learning_rate:.2f})"
+        st.session_state.roster_editor_version += 1
+        st.session_state.lineup_editor_version += 1
+        st.rerun()
+
+    if st.session_state.get("calibracion_aplicada_ok") and st.session_state.get("historial_calibracion"):
+        st.success(
+            "✅ Calibración Adaptativa (Filtro Kalman) aplicada exitosamente sobre `st.session_state.df_nba` y `st.session_state.lineups_nba`. "
+            "Puedes descargar el archivo Excel calibrado desde la barra lateral."
+        )
+        st.dataframe(
+            pd.DataFrame(st.session_state.historial_calibracion),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def init_session_state() -> None:
@@ -744,6 +1054,10 @@ def init_session_state() -> None:
         )
     if "calendario_nba" not in st.session_state:
         st.session_state.calendario_nba = obtener_calendario_nba_hoy()
+    if "calendario_auditoria_nba" not in st.session_state:
+        ayer_str = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+        cal_ayer = obtener_calendario_nba_hoy(fecha_yyyymmdd=ayer_str)
+        st.session_state.calendario_auditoria_nba = cal_ayer if cal_ayer else st.session_state.calendario_nba
     if "lineas_mercado_nba" not in st.session_state:
         st.session_state.lineas_mercado_nba = obtener_lineas_mercado_nba(api_key=None)
     if "last_odds_api_key" not in st.session_state:
@@ -770,6 +1084,12 @@ def init_session_state() -> None:
         st.session_state.excel_cargado_ok = False
     if "df_excel_preview" not in st.session_state:
         st.session_state.df_excel_preview = None
+    if "custom_final_scores" not in st.session_state:
+        st.session_state.custom_final_scores = {}
+    if "historial_calibracion" not in st.session_state:
+        st.session_state.historial_calibracion = []
+    if "calibracion_aplicada_ok" not in st.session_state:
+        st.session_state.calibracion_aplicada_ok = False
 
 
 def reset_all_lineups() -> None:
@@ -780,6 +1100,8 @@ def reset_all_lineups() -> None:
     st.session_state.excel_procesado_sig = None
     st.session_state.excel_cargado_ok = False
     st.session_state.df_excel_preview = None
+    st.session_state.calibracion_aplicada_ok = False
+    st.session_state.historial_calibracion = []
     st.session_state.lineup_editor_version += 1
     st.session_state.roster_editor_version += 1
 
@@ -812,7 +1134,7 @@ def render_live_roster_manager() -> None:
         top_c1, top_c2 = st.columns([3.4, 1.2])
         with top_c1:
             st.markdown(
-                '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.77rem; color:#CBD5E1; margin-bottom:6px;">Métricas activas en <code>st.session_state.df_nba</code> (sincronizadas automáticamente con tu Excel o ediciones tácticas).</div>',
+                '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.77rem; color:#CBD5E1; margin-bottom:6px;">Métricas activas en <code>st.session_state.df_nba</code> (sincronizadas automáticamente con tu Excel o calibraciones Kalman).</div>',
                 unsafe_allow_html=True,
             )
         with top_c2:
@@ -824,6 +1146,8 @@ def render_live_roster_manager() -> None:
                 st.session_state.excel_procesado_sig = None
                 st.session_state.excel_cargado_ok = False
                 st.session_state.df_excel_preview = None
+                st.session_state.calibracion_aplicada_ok = False
+                st.session_state.historial_calibracion = []
                 st.session_state.roster_editor_version += 1
                 st.session_state.lineup_editor_version += 1
                 st.rerun()
@@ -938,29 +1262,40 @@ def main() -> None:
 
     st.sidebar.markdown(
         '<div style="font-family:\'Orbitron\',sans-serif; font-size:1.05rem; font-weight:900; color:#00F5D4; letter-spacing:0.08em; margin-bottom:4px;">⚡ SHARP SYNDICATE</div>'
-        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v12.0 (PTS/REB/AST +EV)</div>',
+        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-bottom:14px;">MODULAR QUANT ARCHITECTURE v13.0 (KALMAN +EV)</div>',
         unsafe_allow_html=True,
     )
 
     # ==========================================================================
-    # MÓDULO DE DESCARGA Y CARGA REACTIVA DE ROSTERS EN EXCEL (.XLSX)
+    # MÓDULO DE DESCARGA Y CARGA REACTIVA DE ROSTERS / EXCEL CALIBRADO (.XLSX)
     # ==========================================================================
-    with st.sidebar.expander("📁 Importar / Exportar Rosters en Excel", expanded=True):
+    with st.sidebar.expander("📁 Rosters & Excel Calibrado (.xlsx)", expanded=True):
         excel_bytes = construir_excel_plantilla_bytes(
             lineups_dict=st.session_state.lineups_nba,
             df_teams=st.session_state.df_nba,
+            historial_calibracion=st.session_state.get("historial_calibracion"),
         )
 
         st.download_button(
-            label="📥 Descargar Plantilla Roster (Excel)",
+            label="📥 Descargar Excel Calibrado (.xlsx)",
+            data=excel_bytes,
+            file_name="nba_rosters_calibrado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="btn_download_calibrated_excel",
+        )
+
+        st.download_button(
+            label="📥 Descargar Plantilla Roster Base (.xlsx)",
             data=excel_bytes,
             file_name="nba_rosters_plantilla.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+            key="btn_download_template_excel",
         )
 
         archivo_subido = st.file_uploader(
-            "Sube tu Excel editado (.xlsx)",
+            "Sube tu Excel editado o calibrado (.xlsx)",
             type=["xlsx"],
             key="uploader_excel_rosters",
         )
@@ -1105,11 +1440,11 @@ def main() -> None:
                 <div class="font-mono" style="font-size:0.76rem; color:#94A3B8;">
                     FORMATO CUOTAS: <strong style="color:#00F5D4;">DECIMAL ESTRICTO</strong> &nbsp;|&nbsp;
                     SIMULATIONS: <strong style="color:#F8FAFC;">{n_sims:,} / GAME</strong> &nbsp;|&nbsp;
-                    PROPS POISSON: <strong style="color:#38BDF8;">PTS &bull; REB &bull; AST (&ge;5% +EV)</strong>
+                    FEEDBACK LOOP: <strong style="color:#38BDF8;">KALMAN ADAPTIVE</strong>
                 </div>
             </div>
             <div class="tv-title">TERMINAL SHARP: NBA QUANT SCANNER</div>
-            <div class="tv-subtitle">Auditoría de líneas de mercado (Totales, Hándicap y Player Props de Puntos, Rebotes y Asistencias) frente a simulaciones Monte Carlo y Poisson en formato decimal.</div>
+            <div class="tv-subtitle">Auditoría de líneas de mercado (+EV Decimal), Player Props Multimercado (PTS, REB, AST) y Calibración Adaptativa Post-Partido (Filtro Kalman).</div>
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">CARTELERA HOY: <strong>{active_games_count} PARTIDO(S)</strong></div>
                 <div class="telemetry-pill">ITERACIONES TOTALES: <strong>{active_games_count * n_sims:,}</strong></div>
@@ -1122,60 +1457,135 @@ def main() -> None:
 
     render_live_roster_manager()
 
-    if st.session_state.nba_partido_activo is None:
-        with st.expander("♟️ Laboratorio Táctico de Quintetos Titulares (30 Franquicias - O_EPM / D_EPM)", expanded=False):
-            q_col1, q_col2 = st.columns([2.5, 1.5])
-            with q_col1:
-                chosen_team_for_lineup = st.selectbox("Selecciona una franquicia para editar su Quinteto Titular y Rotación (240 min):", options=team_list, index=0)
-            with q_col2:
-                st.write("")
-                if st.button("🔄 Restablecer Quintetos Base (30 Equipos)", key="btn_reset_global_lineups", use_container_width=True):
-                    reset_all_lineups()
+    # ==========================================================================
+    # DIVISIÓN PRINCIPAL EN DOS PESTAÑAS (CARTELERA EN VIVO vs AUDITORÍA KALMAN)
+    # ==========================================================================
+    tab_cartelera, tab_auditoria = st.tabs(
+        ["🏀 Cartelera & Momios en Vivo", "📈 Auditoría & Calibración"]
+    )
+
+    with tab_cartelera:
+        if st.session_state.nba_partido_activo is None:
+            with st.expander("♟️ Laboratorio Táctico de Quintetos Titulares (30 Franquicias - O_EPM / D_EPM)", expanded=False):
+                q_col1, q_col2 = st.columns([2.5, 1.5])
+                with q_col1:
+                    chosen_team_for_lineup = st.selectbox(
+                        "Selecciona una franquicia para editar su Quinteto Titular y Rotación (240 min):",
+                        options=team_list,
+                        index=0,
+                    )
+                with q_col2:
+                    st.write("")
+                    if st.button("🔄 Restablecer Quintetos Base (30 Equipos)", key="btn_reset_global_lineups", use_container_width=True):
+                        reset_all_lineups()
+                        st.rerun()
+
+                chosen_row = df_teams[df_teams["Team"] == chosen_team_for_lineup].iloc[0]
+                render_team_lineup_editor_panel(
+                    chosen_team_for_lineup,
+                    str(chosen_row["Team_Abbr"]),
+                    float(chosen_row.get("Base_Pace", chosen_row["Pace"])),
+                    "global_lab",
+                )
+
+            if usar_espn_en_vivo:
+                selected_matchups = espn_matchups_validos
+                slate_meta = espn_meta_validos
+                render_manual_slate_selector(df_teams, n_sims=n_sims, expanded_default=False)
+            else:
+                if not espn_matchups_validos:
+                    st.info(
+                        "📅 Hoy no hay partidos programados en el calendario oficial de ESPN (o el servicio está fuera de horario). "
+                        "Puedes seleccionar y simular manualmente cualquier cruce de las 30 franquicias a continuación."
+                    )
+                render_manual_slate_selector(df_teams, n_sims=n_sims, expanded_default=st.session_state.config_expanded)
+                num_games_manual = int(st.session_state.get("num_games", 6))
+                selected_matchups = list(st.session_state.active_matchups[:num_games_manual])
+                if len(selected_matchups) < num_games_manual:
+                    for extra_idx in range(len(selected_matchups), num_games_manual):
+                        fallback_pair = FULL_30_TEAM_SLATE[extra_idx % len(FULL_30_TEAM_SLATE)]
+                        if fallback_pair[0] in team_list and fallback_pair[1] in team_list:
+                            selected_matchups.append(fallback_pair)
+                slate_meta = None
+
+            if not selected_matchups:
+                st.info("Selecciona al menos un partido válido para visualizar la Cartelera NBA.")
+            else:
+                sim_results: List[Dict] = []
+                for idx, (away_name, home_name) in enumerate(selected_matchups):
+                    away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
+                    home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
+                    away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
+                    matchup_key = f"{away_abbr}@{home_abbr}"
+
+                    c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(idx, (None, None))
+                    mkt_odds_info = lineas_mercado_dict.get(matchup_key)
+                    if mkt_odds_info is None and slate_meta and idx < len(slate_meta):
+                        mkt_odds_info = slate_meta[idx]
+
+                    away_lu_session = obtener_lineup_en_sesion(away_abbr)
+                    home_lu_session = obtener_lineup_en_sesion(home_abbr)
+
+                    res = run_monte_carlo_matchup(
+                        away_row_raw=away_row_raw,
+                        home_row_raw=home_row_raw,
+                        away_lineup=away_lu_session,
+                        home_lineup=home_lu_session,
+                        n_sims=n_sims,
+                        hfa_pts=hfa_pts,
+                        custom_spread_home=c_sp,
+                        custom_total_line=c_tot,
+                        market_odds_info=mkt_odds_info,
+                        umbral_ev_pts=umbral_ev_pts,
+                        seed=int(base_seed) + idx * 101,
+                    )
+                    sim_results.append(res)
+
+                radar_picks = extract_executive_radar(sim_results)
+                render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
+                render_slate_grid_3x3(sim_results, slate_meta=slate_meta, umbral_ev_pts=umbral_ev_pts)
+
+        else:
+            active_info = st.session_state.nba_partido_activo
+            game_idx = int(active_info.get("idx", 0))
+            away_name, home_name = str(active_info["away_team"]), str(active_info["home_team"])
+            hora_info, estado_info = str(active_info.get("hora", "")), str(active_info.get("estado", ""))
+
+            nav_c1, nav_c2, nav_c3 = st.columns([1.4, 2.5, 1.1])
+            with nav_c1:
+                if st.button("← Volver a la Cartelera NBA", key="top_back_to_grid_btn", use_container_width=True):
+                    st.session_state.nba_partido_activo = None
+                    st.rerun()
+            with nav_c2:
+                meta_suffix = f" ({estado_info} • {hora_info})" if hora_info or estado_info else ""
+                st.markdown(
+                    f'<div style="display:flex; align-items:center; height:38px; font-family:\'JetBrains Mono\',monospace; font-size:0.80rem; color:#00F5D4;">📂 EXPEDIENTE ACTIVO: <strong style="color:#F8FAFC; margin-left:8px;">{away_name.upper()} @ {home_name.upper()}{meta_suffix}</strong></div>',
+                    unsafe_allow_html=True,
+                )
+            with nav_c3:
+                if st.button("🔄 Reset Quintetos a Base", key="reset_matchup_lineups_btn", use_container_width=True):
+                    a_abbr = str(df_teams[df_teams["Team"] == away_name].iloc[0]["Team_Abbr"])
+                    h_abbr = str(df_teams[df_teams["Team"] == home_name].iloc[0]["Team_Abbr"])
+                    default_dict = build_default_lineups_dict()
+                    st.session_state.lineups_nba[a_abbr] = default_dict[a_abbr]
+                    st.session_state.lineups_nba[h_abbr] = default_dict[h_abbr]
+                    st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+                        st.session_state.df_nba, st.session_state.lineups_nba
+                    )
+                    st.session_state.lineup_editor_version += 1
                     st.rerun()
 
-            chosen_row = df_teams[df_teams["Team"] == chosen_team_for_lineup].iloc[0]
-            render_team_lineup_editor_panel(chosen_team_for_lineup, str(chosen_row["Team_Abbr"]), float(chosen_row.get("Base_Pace", chosen_row["Pace"])), "global_lab")
-
-        if usar_espn_en_vivo:
-            selected_matchups = espn_matchups_validos
-            slate_meta = espn_meta_validos
-            render_manual_slate_selector(df_teams, n_sims=n_sims, expanded_default=False)
-        else:
-            if not espn_matchups_validos:
-                st.info(
-                    "📅 Hoy no hay partidos programados en el calendario oficial de ESPN (o el servicio está fuera de horario). "
-                    "Puedes seleccionar y simular manualmente cualquier cruce de las 30 franquicias a continuación."
-                )
-            render_manual_slate_selector(df_teams, n_sims=n_sims, expanded_default=st.session_state.config_expanded)
-            num_games_manual = int(st.session_state.get("num_games", 6))
-            selected_matchups = list(st.session_state.active_matchups[:num_games_manual])
-            if len(selected_matchups) < num_games_manual:
-                for extra_idx in range(len(selected_matchups), num_games_manual):
-                    fallback_pair = FULL_30_TEAM_SLATE[extra_idx % len(FULL_30_TEAM_SLATE)]
-                    if fallback_pair[0] in team_list and fallback_pair[1] in team_list:
-                        selected_matchups.append(fallback_pair)
-            slate_meta = None
-
-        if not selected_matchups:
-            st.info("Selecciona al menos un partido válido para visualizar la Cartelera NBA.")
-            return
-
-        sim_results: List[Dict] = []
-        for idx, (away_name, home_name) in enumerate(selected_matchups):
             away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
             home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
             away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
             matchup_key = f"{away_abbr}@{home_abbr}"
-
-            c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(idx, (None, None))
+            c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(game_idx, (None, None))
             mkt_odds_info = lineas_mercado_dict.get(matchup_key)
-            if mkt_odds_info is None and slate_meta and idx < len(slate_meta):
-                mkt_odds_info = slate_meta[idx]
 
             away_lu_session = obtener_lineup_en_sesion(away_abbr)
             home_lu_session = obtener_lineup_en_sesion(home_abbr)
 
-            res = run_monte_carlo_matchup(
+            detailed_res = run_monte_carlo_matchup(
                 away_row_raw=away_row_raw,
                 home_row_raw=home_row_raw,
                 away_lineup=away_lu_session,
@@ -1186,69 +1596,18 @@ def main() -> None:
                 custom_total_line=c_tot,
                 market_odds_info=mkt_odds_info,
                 umbral_ev_pts=umbral_ev_pts,
-                seed=int(base_seed) + idx * 101,
+                seed=int(base_seed) + game_idx * 101,
             )
-            sim_results.append(res)
 
-        radar_picks = extract_executive_radar(sim_results)
-        render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
-        render_slate_grid_3x3(sim_results, slate_meta=slate_meta, umbral_ev_pts=umbral_ev_pts)
+            render_detailed_matchup_dossier(detailed_res)
 
-    else:
-        active_info = st.session_state.nba_partido_activo
-        game_idx = int(active_info.get("idx", 0))
-        away_name, home_name = str(active_info["away_team"]), str(active_info["home_team"])
-        hora_info, estado_info = str(active_info.get("hora", "")), str(active_info.get("estado", ""))
-
-        nav_c1, nav_c2, nav_c3 = st.columns([1.4, 2.5, 1.1])
-        with nav_c1:
-            if st.button("← Volver a la Cartelera NBA", key="top_back_to_grid_btn", use_container_width=True):
-                st.session_state.nba_partido_activo = None
-                st.rerun()
-        with nav_c2:
-            meta_suffix = f" ({estado_info} • {hora_info})" if hora_info or estado_info else ""
-            st.markdown(
-                f'<div style="display:flex; align-items:center; height:38px; font-family:\'JetBrains Mono\',monospace; font-size:0.80rem; color:#00F5D4;">📂 EXPEDIENTE ACTIVO: <strong style="color:#F8FAFC; margin-left:8px;">{away_name.upper()} @ {home_name.upper()}{meta_suffix}</strong></div>',
-                unsafe_allow_html=True,
-            )
-        with nav_c3:
-            if st.button("🔄 Reset Quintetos a Base", key="reset_matchup_lineups_btn", use_container_width=True):
-                a_abbr = str(df_teams[df_teams["Team"] == away_name].iloc[0]["Team_Abbr"])
-                h_abbr = str(df_teams[df_teams["Team"] == home_name].iloc[0]["Team_Abbr"])
-                default_dict = build_default_lineups_dict()
-                st.session_state.lineups_nba[a_abbr] = default_dict[a_abbr]
-                st.session_state.lineups_nba[h_abbr] = default_dict[h_abbr]
-                st.session_state.df_nba = sincronizar_df_nba_con_lineups(
-                    st.session_state.df_nba, st.session_state.lineups_nba
-                )
-                st.session_state.lineup_editor_version += 1
-                st.rerun()
-
-        away_row_raw = df_teams[df_teams["Team"] == away_name].iloc[0]
-        home_row_raw = df_teams[df_teams["Team"] == home_name].iloc[0]
-        away_abbr, home_abbr = str(away_row_raw["Team_Abbr"]), str(home_row_raw["Team_Abbr"])
-        matchup_key = f"{away_abbr}@{home_abbr}"
-        c_sp, c_tot = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(game_idx, (None, None))
-        mkt_odds_info = lineas_mercado_dict.get(matchup_key)
-
-        away_lu_session = obtener_lineup_en_sesion(away_abbr)
-        home_lu_session = obtener_lineup_en_sesion(home_abbr)
-
-        detailed_res = run_monte_carlo_matchup(
-            away_row_raw=away_row_raw,
-            home_row_raw=home_row_raw,
-            away_lineup=away_lu_session,
-            home_lineup=home_lu_session,
+    with tab_auditoria:
+        render_post_game_audit_tab(
+            df_teams=df_teams,
             n_sims=n_sims,
             hfa_pts=hfa_pts,
-            custom_spread_home=c_sp,
-            custom_total_line=c_tot,
-            market_odds_info=mkt_odds_info,
-            umbral_ev_pts=umbral_ev_pts,
-            seed=int(base_seed) + game_idx * 101,
+            base_seed=int(base_seed),
         )
-
-        render_detailed_matchup_dossier(detailed_res)
 
 
 if __name__ == "__main__":
