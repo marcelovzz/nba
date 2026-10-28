@@ -189,12 +189,12 @@ button[data-baseweb="tab"][aria-selected="true"] {
 .mc-terminal-breakdown {
     margin-top: 8px;
     padding: 10px 12px;
-    background: linear-gradient(180deg, rgba(3, 6, 14, 0.95) 0%, rgba(7, 12, 24, 0.92) 100%);
-    border: 1px solid rgba(0, 255, 204, 0.25);
+    background: #0d1117;
+    border: 1px solid rgba(0, 255, 204, 0.28);
     border-left: 3px solid #00ffcc;
     border-radius: 10px;
     font-family: 'JetBrains Mono', monospace;
-    box-shadow: inset 0 1px 10px rgba(0, 0, 0, 0.65);
+    box-shadow: inset 0 1px 10px rgba(0, 0, 0, 0.75);
 }
 .mc-terminal-header {
     font-family: 'JetBrains Mono', monospace;

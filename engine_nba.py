@@ -2045,3 +2045,231 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
                 best_prop = prop
 
     return {"lock": best_ml, "spread": best_spread, "total": best_total, "prop": best_prop}
+
+
+# ==============================================================================
+# EXPORTACIÓN DE PROYECCIONES CUANTITATIVAS NBA (5,000 SIMULACIONES -> XLSX / CSV)
+# ==============================================================================
+def build_nba_predictions_export_df(
+    results_list: List[Dict[str, Any]],
+    slate_meta: Optional[List[Dict[str, Any]]] = None,
+    fecha_str: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Compila en un DataFrame estructurado los resultados completos de las 5,000 simulaciones
+    de Monte Carlo para todos los partidos de la cartelera activa:
+      - Fecha y Hora, Equipo Visita, Equipo Local
+      - Puntos Proyectados Visita y Local
+      - Probabilidad Modelo ML Visita / Local (%), Cuota Justa Decimal
+      - Probabilidad Mercado ML (%), ESPN BPI (%)
+      - Línea Spread Mercado, % Cubrir Local, % Cubrir Visita
+      - Línea Total Mercado, % Over, % Under
+      - Edge / EV% detectado y Apuesta Sugerida
+    """
+    if fecha_str is None:
+        if st is not None and hasattr(st, "session_state") and "fecha_nba" in st.session_state:
+            try:
+                fecha_str = st.session_state.fecha_nba.strftime("%Y-%m-%d")
+            except Exception:
+                fecha_str = "2026-10-28"
+        else:
+            fecha_str = "2026-10-28"
+
+    rows: List[Dict[str, Any]] = []
+    for idx, res in enumerate(results_list or []):
+        away_abbr = str(res.get("away_abbr", "AWAY"))
+        home_abbr = str(res.get("home_abbr", "HOME"))
+        away_team = str(res.get("away_team", away_abbr))
+        home_team = str(res.get("home_team", home_abbr))
+
+        meta = slate_meta[idx] if slate_meta and idx < len(slate_meta) and isinstance(slate_meta[idx], dict) else {}
+        hora_juego = str(
+            meta.get("hora")
+            or res.get("hora")
+            or GAME_SLATE_TIMES[idx % len(GAME_SLATE_TIMES)]
+        )
+        fecha_hora_str = f"{fecha_str} {hora_juego}".strip()
+
+        desg = res.get("desglose_5000_sims") or {}
+        val_tot = res.get("valor_totales") or {}
+        val_sp = res.get("valor_spread") or {}
+
+        exp_away = round(float(res.get("exp_away_pts", 0.0)), 1)
+        exp_home = round(float(res.get("exp_home_pts", 0.0)), 1)
+        exp_total = round(float(res.get("exp_total_pts", exp_away + exp_home)), 1)
+
+        prob_mod_away = round(float(res.get("away_win_prob", 0.5)) * 100.0, 1)
+        prob_mod_home = round(float(res.get("home_win_prob", 0.5)) * 100.0, 1)
+        fair_ml_away = round(float(res.get("away_ml_dec", 2.00)), 2)
+        fair_ml_home = round(float(res.get("home_ml_dec", 2.00)), 2)
+
+        prob_mkt_away = round(float(desg.get("prob_ml_away_casas", 50.0)), 1)
+        prob_mkt_home = round(float(desg.get("prob_ml_home_casas", 50.0)), 1)
+        espn_bpi_away = round(float(desg.get("prob_ml_away_espn", 50.0)), 1)
+        espn_bpi_home = round(float(desg.get("prob_ml_home_espn", 50.0)), 1)
+
+        sp_home_line = round(float(res.get("spread_line_home", 0.0)), 1)
+        sp_away_line = round(float(res.get("spread_line_away", -sp_home_line)), 1)
+        linea_spread_mkt_str = f"{home_abbr} {sp_home_line:+.1f} / {away_abbr} {sp_away_line:+.1f}"
+        pct_cubre_local = round(float(res.get("home_cover_prob", 0.5)) * 100.0, 1)
+        pct_cubre_visita = round(float(res.get("away_cover_prob", 0.5)) * 100.0, 1)
+
+        linea_total_mkt = round(float(res.get("total_line", 222.5)), 1)
+        pct_over = round(float(res.get("over_prob", 0.5)) * 100.0, 1)
+        pct_under = round(float(res.get("under_prob", 0.5)) * 100.0, 1)
+
+        # Construcción de Edge / EV% detectado y Apuesta Sugerida
+        edges_detectados: List[str] = []
+        apuestas_sugeridas: List[str] = []
+
+        if val_sp.get("valor"):
+            sp_pick = str(val_sp.get("pick", ""))
+            sp_cuota = float(val_sp.get("cuota", 1.91))
+            sp_edge = float(val_sp.get("edge_pts", 0.0))
+            sp_ev = float(val_sp.get("ev_pct", 0.0))
+            edges_detectados.append(f"Spread: +{sp_edge:.1f} pts ({sp_ev:+.1f}% EV)")
+            apuestas_sugeridas.append(f"⚡ SPREAD {sp_pick} @ {sp_cuota:.2f} ({sp_ev:+.1f}% EV)")
+
+        if val_tot.get("valor"):
+            tot_pick = str(val_tot.get("pick", ""))
+            tot_linea = float(val_tot.get("linea", linea_total_mkt))
+            tot_cuota = float(val_tot.get("cuota", 1.91))
+            tot_edge = float(val_tot.get("edge_pts", 0.0))
+            tot_ev = float(val_tot.get("ev_pct", 0.0))
+            edges_detectados.append(f"Total {tot_pick}: +{tot_edge:.1f} pts ({tot_ev:+.1f}% EV)")
+            apuestas_sugeridas.append(f"🔥 {tot_pick} {tot_linea:.1f} @ {tot_cuota:.2f} ({tot_ev:+.1f}% EV)")
+
+        if desg.get("ml_tiene_ev"):
+            ml_eq = str(desg.get("ml_abbr", home_abbr))
+            ml_c_dec = float(desg.get("ml_cuota_decimal", 1.91))
+            ml_edge_p = float(desg.get("ml_edge_pct", 0.0))
+            ml_ev_p = float(desg.get("ml_ev_pct", 0.0))
+            edges_detectados.append(f"ML {ml_eq}: {ml_edge_p:+.1f}% vs Casas ({ml_ev_p:+.1f}% EV)")
+            if not apuestas_sugeridas:
+                apuestas_sugeridas.append(f"🏀 ML {ml_eq} @ {ml_c_dec:.2f} ({ml_ev_p:+.1f}% EV)")
+
+        if not edges_detectados:
+            best_sp_ev = max(float(desg.get("spread_ev_pct", 0.0)), 0.0)
+            best_tot_ev = max(float(desg.get("ev_over_pct", 0.0)), float(desg.get("ev_under_pct", 0.0)), 0.0)
+            max_ev_residual = max(best_sp_ev, best_tot_ev)
+            edge_str = f"Mercado Eficiente (Máx EV: {max_ev_residual:+.1f}%)"
+        else:
+            edge_str = " | ".join(edges_detectados)
+
+        if not apuestas_sugeridas:
+            fav_abbr_str = str(res.get("fav_abbr", home_abbr))
+            fav_fair_dec = fair_ml_home if fav_abbr_str == home_abbr else fair_ml_away
+            apuesta_str = f"SIN SEÑAL +EV (Lean Modelo: {fav_abbr_str} ML — Fair {fav_fair_dec:.2f})"
+        else:
+            apuesta_str = " + ".join(apuestas_sugeridas)
+
+        rows.append(
+            {
+                "Fecha y Hora": fecha_hora_str,
+                "Equipo Visita": f"{away_team} ({away_abbr})",
+                "Equipo Local": f"{home_team} ({home_abbr})",
+                "Puntos Proyectados Visita": exp_away,
+                "Puntos Proyectados Local": exp_home,
+                "Total Proyectado Modelo": exp_total,
+                "Probabilidad Modelo ML Visita (%)": prob_mod_away,
+                "Probabilidad Modelo ML Local (%)": prob_mod_home,
+                "Cuota Justa Decimal Visita": fair_ml_away,
+                "Cuota Justa Decimal Local": fair_ml_home,
+                "Probabilidad Mercado ML Visita (%)": prob_mkt_away,
+                "Probabilidad Mercado ML Local (%)": prob_mkt_home,
+                "ESPN BPI Visita (%)": espn_bpi_away,
+                "ESPN BPI Local (%)": espn_bpi_home,
+                "Línea Spread Mercado": linea_spread_mkt_str,
+                "% Cubrir Local": pct_cubre_local,
+                "% Cubrir Visita": pct_cubre_visita,
+                "Desglose Spread (5K Sims)": str(desg.get("texto_narrativo_spread", "")),
+                "Línea Total Mercado": linea_total_mkt,
+                "% Over": pct_over,
+                "% Under": pct_under,
+                "Desglose Total (5K Sims)": str(desg.get("texto_narrativo_total", "")),
+                "Edge / EV% Detectado": edge_str,
+                "Apuesta Sugerida": apuesta_str,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def export_nba_excel_bytes(df: pd.DataFrame) -> io.BytesIO:
+    """
+    Compila el DataFrame de proyecciones (`build_nba_predictions_export_df`) en memoria binaria
+    (`io.BytesIO`) usando `openpyxl`, con encabezados claros, formato numérico limpio,
+    columnas autoajustadas y resaltado condicional para las apuestas con ventaja (+EV).
+    """
+    buffer = io.BytesIO()
+    df_export = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        sheet_name = "Proyecciones_NBA_5000_Sims"
+        df_export.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.sheets[sheet_name]
+        ws.views.sheetView[0].showGridLines = True
+        ws.freeze_panes = "A2"
+
+        header_fill = PatternFill(start_color="0D1117", end_color="0D1117", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="00FFCC")
+        zebra_fill = PatternFill(start_color="F4F7FA", end_color="F4F7FA", fill_type="solid")
+        ev_fill = PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid")
+        ev_font = Font(name="Calibri", size=10, bold=True, color="065F46")
+        regular_font = Font(name="Calibri", size=10, bold=False, color="111827")
+        thin_border = Border(
+            left=Side(style="thin", color="CBD5E1"),
+            right=Side(style="thin", color="CBD5E1"),
+            top=Side(style="thin", color="CBD5E1"),
+            bottom=Side(style="thin", color="CBD5E1"),
+        )
+
+        num_cols = len(df_export.columns)
+        num_rows = len(df_export)
+
+        for col_idx in range(1, num_cols + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+        ws.row_dimensions[1].height = 28
+
+        for row_idx in range(2, num_rows + 2):
+            apuesta_val = str(ws.cell(row=row_idx, column=num_cols).value or "")
+            has_ev_pick = ("EV)" in apuesta_val) and not apuesta_val.startswith("SIN SEÑAL")
+            ws.row_dimensions[row_idx].height = 21
+
+            for col_idx in range(1, num_cols + 1):
+                c = ws.cell(row=row_idx, column=col_idx)
+                col_name = str(df_export.columns[col_idx - 1])
+                c.border = thin_border
+                c.font = ev_font if (has_ev_pick and col_idx >= num_cols - 1) else regular_font
+
+                if has_ev_pick and col_idx >= num_cols - 1:
+                    c.fill = ev_fill
+                elif (row_idx - 2) % 2 == 1:
+                    c.fill = zebra_fill
+
+                if isinstance(c.value, (int, float, np.floating, np.integer)):
+                    c.alignment = Alignment(horizontal="right", vertical="center")
+                    if "Cuota" in col_name:
+                        c.number_format = "0.00"
+                    else:
+                        c.number_format = "0.0"
+                elif col_idx in (1, 15, 18, 22):
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    c.alignment = Alignment(horizontal="left", vertical="center")
+
+        for col_idx, col_name in enumerate(df_export.columns, start=1):
+            col_letter = ws.cell(row=1, column=col_idx).column_letter
+            max_len = len(str(col_name))
+            for r_i in range(2, num_rows + 2):
+                val_str = str(ws.cell(row=r_i, column=col_idx).value or "")
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+            ws.column_dimensions[col_letter].width = min(max(max_len + 4, 13), 46)
+
+    buffer.seek(0)
+    return buffer

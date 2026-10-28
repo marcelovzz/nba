@@ -30,12 +30,14 @@ from engine_nba import (
     ROSTER_EDITOR_COLS,
     auditar_partido_nba,
     build_default_lineups_dict,
+    build_nba_predictions_export_df,
     calibrar_ratings_nba,
     calcular_desglose_5000_simulaciones,
     calcular_ratings_lineup,
     construir_excel_plantilla_bytes,
     evaluar_valor_spread_nba,
     evaluar_valor_totales_nba,
+    export_nba_excel_bytes,
     extract_executive_radar,
     generar_dataframe_plantilla_excel,
     obtener_lineup_en_sesion,
@@ -930,18 +932,60 @@ def _construir_partidos_finalizados_para_auditoria(
     return pares_auditoria, True
 
 
+def render_predictions_export_panel(export_df: pd.DataFrame, key_suffix: str = "audit_tab") -> None:
+    """
+    Renderiza el módulo de exportación de todas las proyecciones de las 5,000 simulaciones
+    en formato Excel (.xlsx) y CSV (.csv), junto con vista previa interactiva.
+    """
+    if export_df is None or export_df.empty:
+        return
+
+    st.markdown(
+        '<div class="section-banner"><div class="section-banner-title">📤 EXPORTACIÓN DE PROYECCIONES CUANTITATIVAS (5,000 SIMULACIONES)</div>'
+        f'<div class="section-banner-tag">{len(export_df)} PARTIDO(S) COMPILADOS &bull; EXCEL (.XLSX) &amp; CSV</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    dl_c1, dl_c2 = st.columns(2)
+    with dl_c1:
+        st.download_button(
+            label="📥 Descargar Proyecciones NBA (.xlsx)",
+            data=export_nba_excel_bytes(export_df),
+            file_name="nba_quant_predictions.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"btn_dl_xlsx_{key_suffix}",
+        )
+    with dl_c2:
+        st.download_button(
+            label="📄 Exportar Proyecciones NBA (.csv)",
+            data=export_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="nba_quant_predictions.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"btn_dl_csv_{key_suffix}",
+        )
+
+    with st.expander("📋 Ver Tabla Completa de Proyecciones, Edge/EV% y Apuestas Sugeridas", expanded=(key_suffix == "audit_tab")):
+        st.dataframe(export_df, use_container_width=True, hide_index=True)
+
+
 def render_post_game_audit_tab(
     df_teams: pd.DataFrame,
     n_sims: int,
     hfa_pts: float,
     base_seed: int,
+    export_df: Optional[pd.DataFrame] = None,
 ) -> None:
     """
-    PESTAÑA 2: 📈 AUDITORÍA POST-PARTIDO & CALIBRACIÓN ADAPTATIVA (FILTRO KALMAN)
+    PESTAÑA 2: 📈 AUDITORÍA, CALIBRACIÓN KALMAN & EXPORTACIÓN (.XLSX / .CSV)
     Sincronizada automáticamente con `st.session_state.fecha_nba`.
     """
     fecha_sel: date = st.session_state.get("fecha_nba", date.today())
     fecha_legible = formatear_fecha_larga_es(fecha_sel)
+
+    if export_df is not None and not export_df.empty:
+        render_predictions_export_panel(export_df, key_suffix="audit_tab")
 
     st.markdown(
         f'<div class="section-banner">'
@@ -1594,11 +1638,74 @@ def main() -> None:
 
     render_live_roster_manager()
 
+    # Pre-compilar simulaciones de la cartelera activa para habilitar exportación inmediata en Sidebar y Pestañas
+    if usar_espn_en_vivo:
+        pre_matchups = espn_matchups_validos
+        pre_slate_meta = espn_meta_validos
+    else:
+        num_g_man = int(st.session_state.get("num_games", 6))
+        pre_matchups = list(st.session_state.active_matchups[:num_g_man])
+        if len(pre_matchups) < num_g_man:
+            for extra_i in range(len(pre_matchups), num_g_man):
+                fb_p = FULL_30_TEAM_SLATE[extra_i % len(FULL_30_TEAM_SLATE)]
+                if fb_p[0] in team_list and fb_p[1] in team_list:
+                    pre_matchups.append(fb_p)
+        pre_slate_meta = None
+
+    pre_sim_results: List[Dict] = []
+    for idx_p, (aw_n, hm_n) in enumerate(pre_matchups):
+        aw_r = df_teams[df_teams["Team"] == aw_n].iloc[0]
+        hm_r = df_teams[df_teams["Team"] == hm_n].iloc[0]
+        aw_ab, hm_ab = str(aw_r["Team_Abbr"]), str(hm_r["Team_Abbr"])
+        m_key = f"{aw_ab}@{hm_ab}"
+        c_sp_p, c_tot_p = (None, None) if usar_espn_en_vivo else st.session_state.active_custom_lines.get(idx_p, (None, None))
+        mkt_info_p = lineas_mercado_dict.get(m_key)
+        if mkt_info_p is None and pre_slate_meta and idx_p < len(pre_slate_meta):
+            mkt_info_p = pre_slate_meta[idx_p]
+        res_p = run_monte_carlo_matchup(
+            away_row_raw=aw_r,
+            home_row_raw=hm_r,
+            away_lineup=obtener_lineup_en_sesion(aw_ab),
+            home_lineup=obtener_lineup_en_sesion(hm_ab),
+            n_sims=n_sims,
+            hfa_pts=hfa_pts,
+            custom_spread_home=c_sp_p,
+            custom_total_line=c_tot_p,
+            market_odds_info=mkt_info_p,
+            umbral_ev_pts=umbral_ev_pts,
+            seed=int(base_seed) + idx_p * 101,
+        )
+        pre_sim_results.append(res_p)
+
+    export_df = build_nba_predictions_export_df(
+        pre_sim_results,
+        slate_meta=pre_slate_meta,
+        fecha_str=fecha_seleccionada.strftime("%Y-%m-%d"),
+    )
+    st.session_state.export_df_nba = export_df
+
+    with st.sidebar.expander("📤 Exportar Proyecciones (5,000 Sims)", expanded=True):
+        st.download_button(
+            label="📥 Descargar Proyecciones NBA (.xlsx)",
+            data=export_nba_excel_bytes(export_df),
+            file_name="nba_quant_predictions.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        st.download_button(
+            label="📄 Exportar Proyecciones NBA (.csv)",
+            data=export_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="nba_quant_predictions.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="sidebar_dl_predictions_csv",
+        )
+
     # ==========================================================================
-    # DIVISIÓN PRINCIPAL EN DOS PESTAÑAS (CARTELERA EN VIVO vs AUDITORÍA KALMAN)
+    # DIVISIÓN PRINCIPAL EN DOS PESTAÑAS (CARTELERA EN VIVO vs AUDITORÍA & EXPORTACIÓN)
     # ==========================================================================
     tab_cartelera, tab_auditoria = st.tabs(
-        ["🏀 Cartelera & Momios en Vivo", "📈 Auditoría & Calibración"]
+        ["🏀 Cartelera & Momios en Vivo", "📈 Auditoría & Exportación"]
     )
 
     with tab_cartelera:
@@ -1680,6 +1787,30 @@ def main() -> None:
 
                 radar_picks = extract_executive_radar(sim_results)
                 render_executive_radar(radar_picks, games_count=len(sim_results), n_sims=n_sims)
+                export_df_active = build_nba_predictions_export_df(
+                    sim_results,
+                    slate_meta=slate_meta,
+                    fecha_str=fecha_seleccionada.strftime("%Y-%m-%d"),
+                )
+                q_dl1, q_dl2 = st.columns(2)
+                with q_dl1:
+                    st.download_button(
+                        label="📥 Descargar Proyecciones NBA (.xlsx)",
+                        data=export_nba_excel_bytes(export_df_active),
+                        file_name="nba_quant_predictions.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="main_slate_dl_xlsx",
+                    )
+                with q_dl2:
+                    st.download_button(
+                        label="📄 Exportar Proyecciones NBA (.csv)",
+                        data=export_df_active.to_csv(index=False).encode("utf-8-sig"),
+                        file_name="nba_quant_predictions.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="main_slate_dl_csv",
+                    )
                 render_slate_grid_3x3(
                     sim_results,
                     slate_meta=slate_meta,
@@ -1749,6 +1880,7 @@ def main() -> None:
             n_sims=n_sims,
             hfa_pts=hfa_pts,
             base_seed=int(base_seed),
+            export_df=export_df,
         )
 
 
