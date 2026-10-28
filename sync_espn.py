@@ -1,35 +1,87 @@
 from datetime import date, datetime, timezone
-from zoneinfo import ZoneInfo
 import json
+import math
+from pathlib import Path
 import re
 import time
-import urllib.request
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.request
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import requests
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 try:
     import streamlit as st
 except ImportError:
     st = None
 
+try:
+    from nba_api.stats.endpoints import LeagueDashPlayerStats, LeagueDashTeamStats
+    from nba_api.stats.library.http import NBAStatsHTTP
+
+    NBA_API_AVAILABLE = True
+except Exception:
+    NBAStatsHTTP = None
+    LeagueDashTeamStats = None
+    LeagueDashPlayerStats = None
+    NBA_API_AVAILABLE = False
+
 from engine_nba import (
     DEFAULT_CSV_DATA,
-    LINEUP_COLS,
     build_default_lineups_dict,
     round_to_half_point,
 )
 
 # ==============================================================================
-# ENDPOINTS OFICIALES: THE ODDS API & ESPN SCOREBOARD + CDN DE LOGOS
+# 1. CLIENTE HTTP ROBUSTO CON HEADERS (PROTECCIÓN ANTI-BLOQUEO NBA_API & ESPN)
 # ==============================================================================
-THE_ODDS_API_NBA_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds/"
-ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-URL_NBA_LOGOS = "https://a.espncdn.com/i/teamlogos/nba/500/{}.png"
 NBA_SEASON_TARGET = "2026-27"
+
+CUSTOM_HEADERS: Dict[str, str] = {
+    "Host": "stats.nba.com",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "x-nba-stats-origin": "stats",
+    "x-nba-stats-token": "true",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nba.com/",
+}
+
+if NBAStatsHTTP is not None:
+    NBAStatsHTTP.headers = CUSTOM_HEADERS
+
+# ==============================================================================
+# 2. ENDPOINTS OFICIALES: ESPN SCOREBOARD API + THE ODDS API (NBA DECIMAL)
+# ==============================================================================
+ESPN_NBA_SCOREBOARD_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+)
+THE_ODDS_API_NBA_URL = (
+    "https://api.the-odds-api.com/v4/sports/basketball_nba/odds/"
+)
+
+ESPN_HEADERS: Dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+}
+
+URL_NBA_LOGOS = "https://a.espncdn.com/i/teamlogos/nba/500/{}.png"
 
 NBA_TEAMS: List[str] = [
     "ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
@@ -37,6 +89,7 @@ NBA_TEAMS: List[str] = [
     "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS",
 ]
 
+# Diccionario de nombres en español para formatear la fecha en la cabecera principal
 DIAS_SEMANA_ES: Dict[int, str] = {
     0: "Lunes",
     1: "Martes",
@@ -62,191 +115,169 @@ MESES_ES: Dict[int, str] = {
     12: "Diciembre",
 }
 
-# Mapeo exhaustivo de abreviaturas cortas y nombres completos (The Odds API + ESPN) -> 3 letras NBA
+# Mapa estático de ratings base por franquicia para cálculo de respaldo del ESPN BPI Predictor
+_TEAM_BASE_NET_RTG: Dict[str, float] = {
+    str(r["Team_Abbr"]).upper(): float(r["Off_Rtg"]) - float(r["Def_Rtg"])
+    for r in DEFAULT_CSV_DATA
+}
+
+# Nombre corto de ciudad/franquicia para etiquetas legibles en el bloque de desglose (ej. 'Boston')
+TEAM_SHORT_DISPLAY_NAME: Dict[str, str] = {
+    "ATL": "Atlanta",
+    "BOS": "Boston",
+    "BKN": "Brooklyn",
+    "CHA": "Charlotte",
+    "CHI": "Chicago",
+    "CLE": "Cleveland",
+    "DAL": "Dallas",
+    "DEN": "Denver",
+    "DET": "Detroit",
+    "GSW": "Golden State",
+    "HOU": "Houston",
+    "IND": "Indiana",
+    "LAC": "LA Clippers",
+    "LAL": "LA Lakers",
+    "MEM": "Memphis",
+    "MIA": "Miami",
+    "MIL": "Milwaukee",
+    "MIN": "Minnesota",
+    "NOP": "New Orleans",
+    "NYK": "New York",
+    "OKC": "Oklahoma City",
+    "ORL": "Orlando",
+    "PHI": "Philadelphia",
+    "PHX": "Phoenix",
+    "POR": "Portland",
+    "SAC": "Sacramento",
+    "SAS": "San Antonio",
+    "TOR": "Toronto",
+    "UTA": "Utah",
+    "WAS": "Washington",
+}
+
+
+def formatear_fecha_larga_es(fecha_obj: Optional[date] = None) -> str:
+    """
+    Convierte un objeto `date` o `datetime` a formato largo en español para la cabecera:
+    Ejemplo: `date(2026, 10, 28)` -> `'Miércoles, 28 de Octubre'`
+    """
+    target = fecha_obj or date.today()
+    if isinstance(target, datetime):
+        target = target.date()
+    dia_nombre = DIAS_SEMANA_ES.get(target.weekday(), "Miércoles")
+    mes_nombre = MESES_ES.get(target.month, "Octubre")
+    return f"{dia_nombre}, {target.day} de {mes_nombre}"
+
+
+# Mapeo exhaustivo de códigos cortos de ESPN y nombres completos de The Odds API
+# hacia nuestras 30 abreviaturas estándar del motor ('GSW', 'NYK', 'SAS', 'NOP', 'UTA', 'WAS', etc.)
 ESPN_TO_NBA_ABBR: Dict[str, str] = {
+    # Códigos cortos ESPN
     "GS": "GSW",
     "GSW": "GSW",
-    "GOLDEN STATE WARRIORS": "GSW",
-    "GOLDEN STATE": "GSW",
-    "WARRIORS": "GSW",
     "NY": "NYK",
     "NYK": "NYK",
-    "NEW YORK KNICKS": "NYK",
-    "NEW YORK": "NYK",
-    "KNICKS": "NYK",
-    "NO": "NOP",
-    "NOP": "NOP",
-    "NEW ORLEANS PELICANS": "NOP",
-    "NEW ORLEANS": "NOP",
-    "PELICANS": "NOP",
     "SA": "SAS",
     "SAS": "SAS",
-    "SAN ANTONIO SPURS": "SAS",
-    "SAN ANTONIO": "SAS",
-    "SPURS": "SAS",
+    "NO": "NOP",
+    "NOP": "NOP",
+    "NOH": "NOP",
     "UTAH": "UTA",
     "UTA": "UTA",
-    "UTAH JAZZ": "UTA",
-    "JAZZ": "UTA",
     "WSH": "WAS",
     "WAS": "WAS",
-    "WASHINGTON WIZARDS": "WAS",
-    "WASHINGTON": "WAS",
-    "WIZARDS": "WAS",
-    "PHO": "PHX",
     "PHX": "PHX",
-    "PHOENIX SUNS": "PHX",
-    "PHOENIX": "PHX",
-    "SUNS": "PHX",
-    "BK": "BKN",
+    "PHO": "PHX",
     "BKN": "BKN",
     "BRK": "BKN",
-    "BROOKLYN NETS": "BKN",
-    "BROOKLYN": "BKN",
-    "NETS": "BKN",
-    "BOS": "BOS",
-    "BOSTON CELTICS": "BOS",
-    "BOSTON": "BOS",
-    "CELTICS": "BOS",
-    "PHI": "PHI",
-    "PHILADELPHIA 76ERS": "PHI",
-    "PHILADELPHIA": "PHI",
-    "76ERS": "PHI",
-    "TOR": "TOR",
-    "TORONTO RAPTORS": "TOR",
-    "TORONTO": "TOR",
-    "RAPTORS": "TOR",
-    "CHI": "CHI",
-    "CHICAGO BULLS": "CHI",
-    "CHICAGO": "CHI",
-    "BULLS": "CHI",
-    "CLE": "CLE",
-    "CLEVELAND CAVALIERS": "CLE",
-    "CLEVELAND": "CLE",
-    "CAVALIERS": "CLE",
-    "DET": "DET",
-    "DETROIT PISTONS": "DET",
-    "DETROIT": "DET",
-    "PISTONS": "DET",
-    "IND": "IND",
-    "INDIANA PACERS": "IND",
-    "INDIANA": "IND",
-    "PACERS": "IND",
-    "MIL": "MIL",
-    "MILWAUKEE BUCKS": "MIL",
-    "MILWAUKEE": "MIL",
-    "BUCKS": "MIL",
-    "DEN": "DEN",
-    "DENVER NUGGETS": "DEN",
-    "DENVER": "DEN",
-    "NUGGETS": "DEN",
-    "MIN": "MIN",
-    "MINNESOTA TIMBERWOLVES": "MIN",
-    "MINNESOTA": "MIN",
-    "TIMBERWOLVES": "MIN",
-    "OKC": "OKC",
-    "OKLAHOMA CITY THUNDER": "OKC",
-    "OKLAHOMA CITY": "OKC",
-    "THUNDER": "OKC",
-    "POR": "POR",
-    "PORTLAND TRAIL BLAZERS": "POR",
-    "PORTLAND": "POR",
-    "TRAIL BLAZERS": "POR",
-    "LAC": "LAC",
-    "LA CLIPPERS": "LAC",
-    "LOS ANGELES CLIPPERS": "LAC",
-    "CLIPPERS": "LAC",
-    "LAL": "LAL",
-    "LOS ANGELES LAKERS": "LAL",
-    "LA LAKERS": "LAL",
-    "LAKERS": "LAL",
-    "SAC": "SAC",
-    "SACRAMENTO KINGS": "SAC",
-    "SACRAMENTO": "SAC",
-    "KINGS": "SAC",
-    "ATL": "ATL",
-    "ATLANTA HAWKS": "ATL",
-    "ATLANTA": "ATL",
-    "HAWKS": "ATL",
     "CHA": "CHA",
     "CHO": "CHA",
+    # Nombres completos de las 30 franquicias (The Odds API / ESPN)
+    "ATLANTA HAWKS": "ATL",
+    "HAWKS": "ATL",
+    "BOSTON CELTICS": "BOS",
+    "CELTICS": "BOS",
+    "BROOKLYN NETS": "BKN",
+    "NETS": "BKN",
     "CHARLOTTE HORNETS": "CHA",
-    "CHARLOTTE": "CHA",
     "HORNETS": "CHA",
-    "MIA": "MIA",
-    "MIAMI HEAT": "MIA",
-    "MIAMI": "MIA",
-    "HEAT": "MIA",
-    "ORL": "ORL",
-    "ORLANDO MAGIC": "ORL",
-    "ORLANDO": "ORL",
-    "MAGIC": "ORL",
-    "DAL": "DAL",
+    "CHICAGO BULLS": "CHI",
+    "BULLS": "CHI",
+    "CLEVELAND CAVALIERS": "CLE",
+    "CAVALIERS": "CLE",
+    "CAVS": "CLE",
     "DALLAS MAVERICKS": "DAL",
-    "DALLAS": "DAL",
     "MAVERICKS": "DAL",
-    "HOU": "HOU",
+    "MAVS": "DAL",
+    "DENVER NUGGETS": "DEN",
+    "NUGGETS": "DEN",
+    "DETROIT PISTONS": "DET",
+    "PISTONS": "DET",
+    "GOLDEN STATE WARRIORS": "GSW",
+    "WARRIORS": "GSW",
     "HOUSTON ROCKETS": "HOU",
-    "HOUSTON": "HOU",
     "ROCKETS": "HOU",
-    "MEM": "MEM",
+    "INDIANA PACERS": "IND",
+    "PACERS": "IND",
+    "LOS ANGELES CLIPPERS": "LAC",
+    "LA CLIPPERS": "LAC",
+    "L.A. CLIPPERS": "LAC",
+    "CLIPPERS": "LAC",
+    "LOS ANGELES LAKERS": "LAL",
+    "LA LAKERS": "LAL",
+    "L.A. LAKERS": "LAL",
+    "LAKERS": "LAL",
     "MEMPHIS GRIZZLIES": "MEM",
-    "MEMPHIS": "MEM",
     "GRIZZLIES": "MEM",
+    "MIAMI HEAT": "MIA",
+    "HEAT": "MIA",
+    "MILWAUKEE BUCKS": "MIL",
+    "BUCKS": "MIL",
+    "MINNESOTA TIMBERWOLVES": "MIN",
+    "TIMBERWOLVES": "MIN",
+    "WOLVES": "MIN",
+    "NEW ORLEANS PELICANS": "NOP",
+    "PELICANS": "NOP",
+    "NEW YORK KNICKS": "NYK",
+    "KNICKS": "NYK",
+    "OKLAHOMA CITY THUNDER": "OKC",
+    "THUNDER": "OKC",
+    "ORLANDO MAGIC": "ORL",
+    "MAGIC": "ORL",
+    "PHILADELPHIA 76ERS": "PHI",
+    "76ERS": "PHI",
+    "SIXERS": "PHI",
+    "PHOENIX SUNS": "PHX",
+    "SUNS": "PHX",
+    "PORTLAND TRAIL BLAZERS": "POR",
+    "TRAIL BLAZERS": "POR",
+    "BLAZERS": "POR",
+    "SACRAMENTO KINGS": "SAC",
+    "KINGS": "SAC",
+    "SAN ANTONIO SPURS": "SAS",
+    "SPURS": "SAS",
+    "TORONTO RAPTORS": "TOR",
+    "RAPTORS": "TOR",
+    "UTAH JAZZ": "UTA",
+    "JAZZ": "UTA",
+    "WASHINGTON WIZARDS": "WAS",
+    "WIZARDS": "WAS",
 }
 
-ESPN_HEADERS: Dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
+NBA_ABBR_TO_ESPN_LOGO: Dict[str, str] = {
+    "GSW": "gs",
+    "NOP": "no",
+    "NYK": "ny",
+    "SAS": "sa",
+    "UTA": "utah",
+    "WAS": "wsh",
 }
-
-CUSTOM_HEADERS: Dict[str, str] = {
-    "Host": "stats.nba.com",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "x-nba-stats-origin": "stats",
-    "x-nba-stats-token": "true",
-    "Connection": "keep-alive",
-    "Referer": "https://www.nba.com/",
-}
-
-try:
-    from nba_api.stats.library.http import NBAStatsHTTP
-    from nba_api.stats.endpoints import LeagueDashPlayerStats, LeagueDashTeamStats
-
-    NBAStatsHTTP.headers = CUSTOM_HEADERS
-    NBA_API_AVAILABLE = True
-except Exception:
-    NBAStatsHTTP = None
-    LeagueDashTeamStats = None
-    LeagueDashPlayerStats = None
-    NBA_API_AVAILABLE = False
-
-
-def formatear_fecha_larga_es(fecha_obj: date) -> str:
-    """
-    Formatea un objeto `datetime.date` en español con el formato:
-    'Miércoles, 28 de Octubre'
-    """
-    dia_nombre = DIAS_SEMANA_ES.get(fecha_obj.weekday(), "Día")
-    mes_nombre = MESES_ES.get(fecha_obj.month, "Mes")
-    return f"{dia_nombre}, {fecha_obj.day} de {mes_nombre}"
 
 
 def normalizar_abbr_nba(team_identifier: str) -> str:
     """
-    Normaliza cualquier abreviatura o nombre de franquicia (de ESPN o The Odds API)
+    Traduce cualquier abreviatura de ESPN ('GS', 'NY', 'NO', 'SA', 'UTAH', 'WSH')
+    o nombre completo de franquicia de The Odds API ('Boston Celtics', 'Los Angeles Lakers')
     al estándar oficial de 3 letras de nuestro motor (GSW, NYK, SAS, NOP, BOS, etc.).
     """
     raw = str(team_identifier).strip().upper()
@@ -256,6 +287,11 @@ def normalizar_abbr_nba(team_identifier: str) -> str:
         if len(key_name) > 3 and key_name in raw:
             return abbr_val
     return raw
+
+
+def _normal_cdf_sync(x: float) -> float:
+    """Función de distribución acumulada normal estándar."""
+    return 0.5 * (1.0 + math.erf(float(x) / math.sqrt(2.0)))
 
 
 def convertir_americano_a_decimal(momio: Any, default_decimal: float = 1.91) -> float:
@@ -297,13 +333,136 @@ def convertir_americano_a_decimal(momio: Any, default_decimal: float = 1.91) -> 
     return round(1.0 + (100.0 / abs(val)), 2)
 
 
+def calcular_probabilidades_implicitas_casas(
+    cuota_home_dec: Optional[float],
+    cuota_away_dec: Optional[float],
+    spread_mercado_home: Optional[float] = None,
+) -> Tuple[float, float, float, float]:
+    """
+    Calcula las cuotas decimales de Moneyline (Local y Visita) y las probabilidades implícitas
+    de las casas de apuestas (normalizadas sin vig para comparación directa 0-100%, además de
+    conservar la cuota decimal real):
+      Retorna: (cuota_ml_home_dec, cuota_ml_away_dec, prob_casas_home_pct, prob_casas_away_pct)
+    """
+    if (
+        cuota_home_dec is not None
+        and cuota_away_dec is not None
+        and float(cuota_home_dec) > 1.01
+        and float(cuota_away_dec) > 1.01
+    ):
+        c_home = round(float(cuota_home_dec), 2)
+        c_away = round(float(cuota_away_dec), 2)
+        inv_h = 1.0 / c_home
+        inv_a = 1.0 / c_away
+        overround = inv_h + inv_a
+        if overround > 0:
+            p_home = (inv_h / overround) * 100.0
+            p_away = (inv_a / overround) * 100.0
+            return c_home, c_away, round(p_home, 1), round(p_away, 1)
+
+    # Si el feed solo reportó el spread de mercado, derivamos la probabilidad implícita de las casas
+    sp_home = float(spread_mercado_home) if spread_mercado_home is not None else -2.5
+    p_home_fair = float(np.clip(_normal_cdf_sync(-sp_home / 11.5), 0.05, 0.95))
+    p_away_fair = 1.0 - p_home_fair
+    vig_factor = 1.022
+    c_home = round(max(1.04, 1.0 / min(0.96, p_home_fair * vig_factor)), 2)
+    c_away = round(max(1.04, 1.0 / min(0.96, p_away_fair * vig_factor)), 2)
+    return c_home, c_away, round(p_home_fair * 100.0, 1), round(p_away_fair * 100.0, 1)
+
+
+def estimar_espn_bpi_probabilidades(
+    away_abbr: str,
+    home_abbr: str,
+    comp: Optional[Dict[str, Any]] = None,
+    spread_mercado_home: Optional[float] = None,
+) -> Tuple[float, float]:
+    """
+    Extrae el Índice Predictor de ESPN (ESPN BPI) desde el bloque del evento de ESPN (`predictor`,
+    `probabilities`, `winPercentage` o `situation.lastPlay.probability`).
+    Si el endpoint público de Scoreboard no incluye el nodo `predictor` explícito en ese momento,
+    calcula el índice predictor BPI institucional combinando el diferencial de Net Rating BPI base
+    de las franquicias (+2.7 HFA) con la línea de consenso de ESPN.
+    Retorna `(espn_bpi_away_pct, espn_bpi_home_pct)` sumando 100.0%.
+    """
+    if isinstance(comp, dict):
+        # 1. Intentar desde comp['predictor']
+        pred = comp.get("predictor")
+        if isinstance(pred, dict):
+            h_proj = pred.get("homeTeam", {}).get("gameProjection") if isinstance(pred.get("homeTeam"), dict) else None
+            a_proj = pred.get("awayTeam", {}).get("gameProjection") if isinstance(pred.get("awayTeam"), dict) else None
+            if h_proj is not None:
+                try:
+                    hp = float(h_proj)
+                    if hp <= 1.0:
+                        hp *= 100.0
+                    hp = float(np.clip(hp, 2.0, 98.0))
+                    return round(100.0 - hp, 1), round(hp, 1)
+                except (TypeError, ValueError):
+                    pass
+            if a_proj is not None:
+                try:
+                    ap = float(a_proj)
+                    if ap <= 1.0:
+                        ap *= 100.0
+                    ap = float(np.clip(ap, 2.0, 98.0))
+                    return round(ap, 1), round(100.0 - ap, 1)
+                except (TypeError, ValueError):
+                    pass
+
+        # 2. Intentar desde situation.lastPlay.probability
+        sit_prob = (
+            comp.get("situation", {}).get("lastPlay", {}).get("probability", {})
+            if isinstance(comp.get("situation"), dict)
+            else {}
+        )
+        if isinstance(sit_prob, dict) and sit_prob.get("homeWinPercentage") is not None:
+            try:
+                hp = float(sit_prob["homeWinPercentage"])
+                if hp <= 1.0:
+                    hp *= 100.0
+                hp = float(np.clip(hp, 2.0, 98.0))
+                return round(100.0 - hp, 1), round(hp, 1)
+            except (TypeError, ValueError):
+                pass
+
+        # 3. Intentar desde odds[0].homeTeamOdds.winPercentage
+        odds_list = comp.get("odds", [])
+        if isinstance(odds_list, list) and odds_list and isinstance(odds_list[0], dict):
+            hto = odds_list[0].get("homeTeamOdds", {})
+            if isinstance(hto, dict) and hto.get("winPercentage") is not None:
+                try:
+                    hp = float(hto["winPercentage"])
+                    if hp <= 1.0:
+                        hp *= 100.0
+                    hp = float(np.clip(hp, 2.0, 98.0))
+                    return round(100.0 - hp, 1), round(hp, 1)
+                except (TypeError, ValueError):
+                    pass
+
+    # 4. Cálculo analítico BPI (Basketball Power Index) basado en Net Rating institucional + HFA
+    away_net = _TEAM_BASE_NET_RTG.get(str(away_abbr).upper(), 0.0)
+    home_net = _TEAM_BASE_NET_RTG.get(str(home_abbr).upper(), 0.0)
+    bpi_expected_margin_home = (home_net - away_net) * 0.92 + 2.75
+
+    if spread_mercado_home is not None:
+        mkt_expected_margin_home = -float(spread_mercado_home)
+        bpi_blended_margin_home = 0.68 * bpi_expected_margin_home + 0.32 * mkt_expected_margin_home
+    else:
+        bpi_blended_margin_home = bpi_expected_margin_home
+
+    home_bpi_prob = float(np.clip(_normal_cdf_sync(bpi_blended_margin_home / 11.6), 0.04, 0.96)) * 100.0
+    away_bpi_prob = 100.0 - home_bpi_prob
+    return round(away_bpi_prob, 1), round(home_bpi_prob, 1)
+
+
 def escudo_nba_html(team_abbr: str, size: int = 32) -> str:
     """
     Genera la etiqueta <img> usando el CDN público de ESPN:
     https://a.espncdn.com/i/teamlogos/nba/500/{abbr}.png
     """
     abbr = normalizar_abbr_nba(team_abbr)
-    url = f"https://a.espncdn.com/i/teamlogos/nba/500/{abbr.lower()}.png"
+    logo_code = NBA_ABBR_TO_ESPN_LOGO.get(abbr, abbr.lower())
+    url = f"https://a.espncdn.com/i/teamlogos/nba/500/{logo_code}.png"
     return (
         f'<img src="{url}" width="{size}" height="{size}" '
         f'style="object-fit: contain; vertical-align: middle; margin-right: 8px;">'
@@ -377,24 +536,50 @@ def _extraer_odds_desde_evento_espn(
     comp: Dict[str, Any], away_abbr: str, home_abbr: str
 ) -> Optional[Dict[str, Any]]:
     """
-    Extrae las líneas de consenso que vienen directamente en `competitions[0].odds`
-    del endpoint público de ESPN Scoreboard y convierte cualquier momio americano a decimal.
+    Extrae las líneas en vivo de Over/Under (`total_mercado`), Spread (`spread_mercado_home`),
+    Moneyline (`cuota_ml_home_decimal`, `cuota_ml_away_decimal`), probabilidades implícitas
+    de las casas de apuestas y el Índice Predictor ESPN BPI directamente desde `competitions[0]`
+    del endpoint público de ESPN Scoreboard, convirtiendo todo momio a formato decimal.
     """
     odds_list = comp.get("odds", [])
-    if not isinstance(odds_list, list) or not odds_list:
-        return None
-
     odds_obj = None
-    for candidate in odds_list:
-        if isinstance(candidate, dict) and (
-            candidate.get("overUnder") is not None
-            or candidate.get("spread") is not None
-            or candidate.get("details")
-        ):
-            odds_obj = candidate
-            break
+    if isinstance(odds_list, list):
+        for candidate in odds_list:
+            if isinstance(candidate, dict) and (
+                candidate.get("overUnder") is not None
+                or candidate.get("spread") is not None
+                or candidate.get("details")
+            ):
+                odds_obj = candidate
+                break
+
+    espn_bpi_away_pct, espn_bpi_home_pct = estimar_espn_bpi_probabilidades(
+        away_abbr=away_abbr,
+        home_abbr=home_abbr,
+        comp=comp,
+        spread_mercado_home=None,
+    )
+
     if odds_obj is None:
-        return None
+        return {
+            "matchup_key": f"{away_abbr}@{home_abbr}",
+            "away_abbr": away_abbr,
+            "home_abbr": home_abbr,
+            "total_mercado": None,
+            "cuota_over_decimal": 1.91,
+            "cuota_under_decimal": 1.91,
+            "spread_mercado_home": None,
+            "cuota_spread_home_decimal": 1.91,
+            "cuota_spread_away_decimal": 1.91,
+            "cuota_ml_home_decimal": None,
+            "cuota_ml_away_decimal": None,
+            "prob_casas_home_pct": None,
+            "prob_casas_away_pct": None,
+            "espn_bpi_home_pct": espn_bpi_home_pct,
+            "espn_bpi_away_pct": espn_bpi_away_pct,
+            "bookmaker": "ESPN BPI Feed",
+            "fuente": "ESPN Scoreboard Feed",
+        }
 
     total_mercado: Optional[float] = None
     if odds_obj.get("overUnder") is not None:
@@ -441,6 +626,7 @@ def _extraer_odds_desde_evento_espn(
     home_team_odds = odds_obj.get("homeTeamOdds", {}) if isinstance(odds_obj.get("homeTeamOdds"), dict) else {}
     away_team_odds = odds_obj.get("awayTeamOdds", {}) if isinstance(odds_obj.get("awayTeamOdds"), dict) else {}
     spread_nested = odds_obj.get("pointSpread", {}) if isinstance(odds_obj.get("pointSpread"), dict) else {}
+    ml_nested = odds_obj.get("moneyline", {}) if isinstance(odds_obj.get("moneyline"), dict) else {}
 
     raw_sp_home_odds = (
         home_team_odds.get("spreadOdds")
@@ -454,14 +640,40 @@ def _extraer_odds_desde_evento_espn(
     cuota_spread_home_decimal = convertir_americano_a_decimal(raw_sp_home_odds, default_decimal=1.91)
     cuota_spread_away_decimal = convertir_americano_a_decimal(raw_sp_away_odds, default_decimal=1.91)
 
+    raw_ml_home = (
+        home_team_odds.get("moneyLine")
+        or home_team_odds.get("odds")
+        or (ml_nested.get("home", {}).get("close", {}).get("odds") if isinstance(ml_nested.get("home"), dict) else None)
+    )
+    raw_ml_away = (
+        away_team_odds.get("moneyLine")
+        or away_team_odds.get("odds")
+        or (ml_nested.get("away", {}).get("close", {}).get("odds") if isinstance(ml_nested.get("away"), dict) else None)
+    )
+
+    c_ml_home_raw = convertir_americano_a_decimal(raw_ml_home, default_decimal=0.0) if raw_ml_home is not None else None
+    c_ml_away_raw = convertir_americano_a_decimal(raw_ml_away, default_decimal=0.0) if raw_ml_away is not None else None
+
+    cuota_ml_home_dec, cuota_ml_away_dec, prob_casas_home_pct, prob_casas_away_pct = (
+        calcular_probabilidades_implicitas_casas(
+            cuota_home_dec=c_ml_home_raw,
+            cuota_away_dec=c_ml_away_raw,
+            spread_mercado_home=spread_mercado_home,
+        )
+    )
+
+    espn_bpi_away_pct, espn_bpi_home_pct = estimar_espn_bpi_probabilidades(
+        away_abbr=away_abbr,
+        home_abbr=home_abbr,
+        comp=comp,
+        spread_mercado_home=spread_mercado_home,
+    )
+
     provider_name = (
         odds_obj.get("provider", {}).get("name", "ESPN Consensus")
         if isinstance(odds_obj.get("provider"), dict)
         else "ESPN Consensus"
     )
-
-    if total_mercado is None and spread_mercado_home is None:
-        return None
 
     return {
         "matchup_key": f"{away_abbr}@{home_abbr}",
@@ -473,6 +685,12 @@ def _extraer_odds_desde_evento_espn(
         "spread_mercado_home": spread_mercado_home,
         "cuota_spread_home_decimal": cuota_spread_home_decimal,
         "cuota_spread_away_decimal": cuota_spread_away_decimal,
+        "cuota_ml_home_decimal": cuota_ml_home_dec,
+        "cuota_ml_away_decimal": cuota_ml_away_dec,
+        "prob_casas_home_pct": prob_casas_home_pct,
+        "prob_casas_away_pct": prob_casas_away_pct,
+        "espn_bpi_home_pct": espn_bpi_home_pct,
+        "espn_bpi_away_pct": espn_bpi_away_pct,
         "bookmaker": str(provider_name),
         "fuente": "ESPN Scoreboard Consensus",
     }
@@ -487,16 +705,19 @@ def _consultar_espn_scoreboard_raw(fecha_str: Optional[str] = None) -> Optional[
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={target_date_str}"
 
     try:
-        resp = requests.get(url, headers=ESPN_HEADERS, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        if requests is not None:
+            resp = requests.get(url, headers=ESPN_HEADERS, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
     except Exception:
-        try:
-            req = urllib.request.Request(url, headers=ESPN_HEADERS)
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except Exception:
-            return None
+        pass
+
+    try:
+        req = urllib.request.Request(url, headers=ESPN_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
 
 
 def obtener_lineas_mercado_nba(
@@ -506,19 +727,20 @@ def obtener_lineas_mercado_nba(
     """
     1. Consulta The Odds API para la NBA:
        - URL: 'https://api.the-odds-api.com/v4/sports/basketball_nba/odds/'
-       - Parámetros: 'regions=us', 'markets=totals,spreads', 'oddsFormat=decimal'
-    2. Módulo Fallback de Respaldo: Si no se pasa API key o falla la llamada, extrae las líneas
-       de consenso directamente del endpoint público de ESPN Scoreboard ('competitions[0].odds')
-       para la fecha solicitada (`?dates={fecha_yyyymmdd}`) en formato decimal.
+       - Parámetros: 'regions=us', 'markets=h2h,totals,spreads', 'oddsFormat=decimal'
+    2. Módulo Fallback de Respaldo: Extrae las líneas de consenso de Over/Under, Spread,
+       Moneyline e Índice Predictor ESPN BPI directamente desde el endpoint público de ESPN
+       Scoreboard ('competitions[0].odds') para la fecha solicitada (`?dates={fecha_yyyymmdd}`)
+       en formato decimal.
     """
     lineas_por_partido: Dict[str, Dict[str, Any]] = {}
     clean_key = str(api_key).strip() if api_key else ""
 
-    if clean_key:
+    if clean_key and requests is not None:
         params = {
             "apiKey": clean_key,
             "regions": "us",
-            "markets": "totals,spreads",
+            "markets": "h2h,totals,spreads",
             "oddsFormat": "decimal",
         }
         try:
@@ -546,6 +768,8 @@ def obtener_lineas_mercado_nba(
                     spread_home: Optional[float] = None
                     cuota_sp_home_dec: float = 1.91
                     cuota_sp_away_dec: float = 1.91
+                    cuota_ml_home_dec: Optional[float] = None
+                    cuota_ml_away_dec: Optional[float] = None
                     book_title: str = "US Sportsbook"
 
                     preferred_keys = {"pinnacle", "draftkings", "fanduel", "betmgm", "caesars", "bovada"}
@@ -601,10 +825,34 @@ def obtener_lineas_mercado_nba(
                                     cuota_sp_away_dec = convertir_americano_a_decimal(away_out.get("price"), 1.91)
                                     book_title = str(book.get("title", book_title))
 
-                        if total_mercado is not None and spread_home is not None:
+                            elif m_key == "h2h" and cuota_ml_home_dec is None:
+                                h_ml_out = None
+                                a_ml_out = None
+                                for o in outcomes:
+                                    o_abbr = normalizar_abbr_nba(str(o.get("name", "")))
+                                    if o_abbr == home_abbr:
+                                        h_ml_out = o
+                                    elif o_abbr == away_abbr:
+                                        a_ml_out = o
+                                if h_ml_out and a_ml_out:
+                                    cuota_ml_home_dec = convertir_americano_a_decimal(h_ml_out.get("price"), 1.91)
+                                    cuota_ml_away_dec = convertir_americano_a_decimal(a_ml_out.get("price"), 1.91)
+
+                        if total_mercado is not None and spread_home is not None and cuota_ml_home_dec is not None:
                             break
 
-                    if total_mercado is not None or spread_home is not None:
+                    if total_mercado is not None or spread_home is not None or cuota_ml_home_dec is not None:
+                        c_ml_h, c_ml_a, p_casas_h, p_casas_a = calcular_probabilidades_implicitas_casas(
+                            cuota_home_dec=cuota_ml_home_dec,
+                            cuota_away_dec=cuota_ml_away_dec,
+                            spread_mercado_home=spread_home,
+                        )
+                        espn_bpi_a, espn_bpi_h = estimar_espn_bpi_probabilidades(
+                            away_abbr=away_abbr,
+                            home_abbr=home_abbr,
+                            comp=None,
+                            spread_mercado_home=spread_home,
+                        )
                         matchup_key = f"{away_abbr}@{home_abbr}"
                         lineas_por_partido[matchup_key] = {
                             "matchup_key": matchup_key,
@@ -616,6 +864,12 @@ def obtener_lineas_mercado_nba(
                             "spread_mercado_home": spread_home,
                             "cuota_spread_home_decimal": round(float(cuota_sp_home_dec), 2),
                             "cuota_spread_away_decimal": round(float(cuota_sp_away_dec), 2),
+                            "cuota_ml_home_decimal": c_ml_h,
+                            "cuota_ml_away_decimal": c_ml_a,
+                            "prob_casas_home_pct": p_casas_h,
+                            "prob_casas_away_pct": p_casas_a,
+                            "espn_bpi_home_pct": espn_bpi_h,
+                            "espn_bpi_away_pct": espn_bpi_a,
                             "bookmaker": book_title,
                             "fuente": f"The Odds API ({book_title})",
                         }
@@ -662,6 +916,9 @@ def obtener_lineas_mercado_nba(
                         existing["spread_mercado_home"] = espn_odds["spread_mercado_home"]
                         existing["cuota_spread_home_decimal"] = espn_odds["cuota_spread_home_decimal"]
                         existing["cuota_spread_away_decimal"] = espn_odds["cuota_spread_away_decimal"]
+                    if existing.get("espn_bpi_home_pct") is None and espn_odds.get("espn_bpi_home_pct") is not None:
+                        existing["espn_bpi_home_pct"] = espn_odds["espn_bpi_home_pct"]
+                        existing["espn_bpi_away_pct"] = espn_odds["espn_bpi_away_pct"]
             except Exception:
                 continue
 
@@ -673,6 +930,9 @@ def obtener_calendario_nba(fecha_str: Optional[str] = None) -> List[Dict[str, An
     Consulta el endpoint público de ESPN Scoreboard para una fecha específica en formato 'YYYYMMDD':
         `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={fecha_str}`
     - Si `fecha_str` es None o vacío, utiliza por defecto la fecha actual del sistema (`datetime.now().strftime("%Y%m%d")`).
+    - Extrae en vivo las líneas de Over/Under (`total_mercado`), Spread (`spread_mercado_home`),
+      probabilidades implícitas de las casas (`prob_casas_home_pct`, `prob_casas_away_pct`) y
+      el Índice Predictor de ESPN BPI (`espn_bpi_home_pct`, `espn_bpi_away_pct`).
     - Si el status del partido es 'STATUS_FINAL' o 'Final' (o `state == 'post'`), extrae:
       * 'score_away_real' y 'score_home_real'
       * 'pace_real' (desde estadísticas de boxscore o vía `(puntos_totales) / 2.25`)

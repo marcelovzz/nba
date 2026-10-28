@@ -8,6 +8,7 @@ import streamlit as st
 
 from styles import (
     TEAM_COLORS,
+    build_mc_breakdown_terminal_html,
     format_edge_badge,
     inject_cyber_quant_css,
     render_form_pills_html,
@@ -30,6 +31,7 @@ from engine_nba import (
     auditar_partido_nba,
     build_default_lineups_dict,
     calibrar_ratings_nba,
+    calcular_desglose_5000_simulaciones,
     calcular_ratings_lineup,
     construir_excel_plantilla_bytes,
     evaluar_valor_spread_nba,
@@ -339,60 +341,64 @@ def render_slate_grid_3x3(
                 footer_left = f"PROY MC: {away_abbr} {res['exp_away_pts']:.1f} - {res['exp_home_pts']:.1f} {home_abbr}"
                 footer_right = f"{res['fav_abbr']} {fav_win_pct:.1f}% (Fair {fav_ml_dec})"
 
+            desglose_mc = res.get("desglose_5000_sims") or {}
+            mc_breakdown_html = build_mc_breakdown_terminal_html(desglose_mc)
+
             with cols[col_idx]:
-                st.markdown(
-                    f"""
-                    <div class="grid-game-card">
-                        <div class="grid-card-top">
-                            <span class="grid-league-badge">{estado_str}</span>
-                            <span class="grid-time-badge">🕒 {hora_str} &bull; PACE {res['exp_possessions']:.1f}</span>
-                        </div>
-                        <div class="grid-team-row">
-                            <div class="grid-team-info">
-                                {escudo_nba_html(away_abbr, size=32)}
-                                <div>
-                                    <span class="grid-team-abbr">{away_abbr}</span>
-                                    <span class="grid-team-fullname">ORTG {away_row['Off_Rtg']:.1f} &middot; DRTG {away_row['Def_Rtg']:.1f}</span>
-                                </div>
-                            </div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                {render_form_pills_html(away_abbr)}
-                                <span class="grid-proj-pts">{res['exp_away_pts']:.1f}</span>
-                            </div>
-                        </div>
-                        <div class="grid-team-row">
-                            <div class="grid-team-info">
-                                {escudo_nba_html(home_abbr, size=32)}
-                                <div>
-                                    <span class="grid-team-abbr">{home_abbr}</span>
-                                    <span class="grid-team-fullname">ORTG {home_row['Off_Rtg']:.1f} &middot; DRTG {home_row['Def_Rtg']:.1f}</span>
-                                </div>
-                            </div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                {render_form_pills_html(home_abbr)}
-                                <span class="grid-proj-pts">{res['exp_home_pts']:.1f}</span>
-                            </div>
-                        </div>
-                        <div class="audit-market-box">
-                            <div class="audit-market-row">
-                                <span class="audit-market-label">TOTALES (MKT vs MOD):</span>
-                                <span class="audit-market-val">O/U {total_mercado:.1f} @ {cuota_tot_display:.2f} &nbsp;|&nbsp; Proy: {total_modelo:.1f}</span>
-                            </div>
-                            {badge_totales_html}
-                            <div class="audit-market-row" style="margin-top:8px;">
-                                <span class="audit-market-label">HÁNDICAP (MKT vs MOD):</span>
-                                <span class="audit-market-val">{mkt_sp_str} &nbsp;|&nbsp; Proy: {mod_sp_str}</span>
-                            </div>
-                            {badge_spread_html}
-                        </div>
-                        <div class="grid-quick-forecast">
-                            <span class="grid-forecast-lines">{footer_left}</span>
-                            <span class="grid-forecast-win">{footer_right}</span>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+                card_html = "\n".join(
+                    [
+                        '<div class="grid-game-card">',
+                        '<div class="grid-card-top">',
+                        f'<span class="grid-league-badge">{estado_str}</span>',
+                        f'<span class="grid-time-badge">🕒 {hora_str} &bull; PACE {res["exp_possessions"]:.1f}</span>',
+                        "</div>",
+                        '<div class="grid-team-row">',
+                        '<div class="grid-team-info">',
+                        f"{escudo_nba_html(away_abbr, size=32)}",
+                        "<div>",
+                        f'<span class="grid-team-abbr">{away_abbr}</span>',
+                        f'<span class="grid-team-fullname">ORTG {away_row["Off_Rtg"]:.1f} &middot; DRTG {away_row["Def_Rtg"]:.1f}</span>',
+                        "</div>",
+                        "</div>",
+                        '<div style="display:flex; align-items:center; gap:8px;">',
+                        f"{render_form_pills_html(away_abbr)}",
+                        f'<span class="grid-proj-pts">{res["exp_away_pts"]:.1f}</span>',
+                        "</div>",
+                        "</div>",
+                        '<div class="grid-team-row">',
+                        '<div class="grid-team-info">',
+                        f"{escudo_nba_html(home_abbr, size=32)}",
+                        "<div>",
+                        f'<span class="grid-team-abbr">{home_abbr}</span>',
+                        f'<span class="grid-team-fullname">ORTG {home_row["Off_Rtg"]:.1f} &middot; DRTG {home_row["Def_Rtg"]:.1f}</span>',
+                        "</div>",
+                        "</div>",
+                        '<div style="display:flex; align-items:center; gap:8px;">',
+                        f"{render_form_pills_html(home_abbr)}",
+                        f'<span class="grid-proj-pts">{res["exp_home_pts"]:.1f}</span>',
+                        "</div>",
+                        "</div>",
+                        mc_breakdown_html,
+                        '<div class="audit-market-box">',
+                        '<div class="audit-market-row">',
+                        '<span class="audit-market-label">TOTALES (MKT vs MOD):</span>',
+                        f'<span class="audit-market-val">O/U {total_mercado:.1f} @ {cuota_tot_display:.2f} &nbsp;|&nbsp; Proy: {total_modelo:.1f}</span>',
+                        "</div>",
+                        badge_totales_html,
+                        '<div class="audit-market-row" style="margin-top:8px;">',
+                        '<span class="audit-market-label">HÁNDICAP (MKT vs MOD):</span>',
+                        f'<span class="audit-market-val">{mkt_sp_str} &nbsp;|&nbsp; Proy: {mod_sp_str}</span>',
+                        "</div>",
+                        badge_spread_html,
+                        "</div>",
+                        '<div class="grid-quick-forecast">',
+                        f'<span class="grid-forecast-lines">{footer_left}</span>',
+                        f'<span class="grid-forecast-win">{footer_right}</span>',
+                        "</div>",
+                        "</div>",
+                    ]
                 )
+                st.markdown(card_html, unsafe_allow_html=True)
 
                 if st.button("LEER ANÁLISIS →", key=f"btn_open_game_{game_id}_{global_idx}", use_container_width=True):
                     st.session_state.nba_partido_activo = {
@@ -726,20 +732,28 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
         unsafe_allow_html=True,
     )
 
+    desglose_detail = res.get("desglose_5000_sims") or {}
+    st.markdown(build_mc_breakdown_terminal_html(desglose_detail), unsafe_allow_html=True)
+
     st.markdown(
         f'<div class="row-label-bar"><span class="row-label-title">📊 FILA 1 // AUDITORÍA DE SIMULACIÓN MONTE CARLO ({res["n_sims"]:,} ITERACIONES)</span>'
-        f'<span class="row-label-sub">WIN % &bull; SPREAD COVER % &bull; TOTAL OVER/UNDER &bull; CUOTAS DECIMALES</span></div>',
+        f'<span class="row-label-sub">MODELO VS CASAS VS ESPN BPI &bull; SPREAD COVER % &bull; TOTAL OVER/UNDER</span></div>',
         unsafe_allow_html=True,
     )
+
+    p_casas_a = float(desglose_detail.get("prob_ml_away_casas", 50.0))
+    p_casas_h = float(desglose_detail.get("prob_ml_home_casas", 50.0))
+    p_espn_a = float(desglose_detail.get("prob_ml_away_espn", 50.0))
+    p_espn_h = float(desglose_detail.get("prob_ml_home_espn", 50.0))
 
     f1_c1, f1_c2, f1_c3 = st.columns(3)
     with f1_c1:
         st.markdown(
-            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>🏆 MONEYLINE (PROB. VICTORIA)</span><span style="color:#00F5D4;">FAIR ODDS DECIMALES</span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} (Visita)</span><span><span class="sim-prob-val">{res["away_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">Fair {res["away_ml_dec"]}</span></span></div>'
-            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} (Local)</span><span><span class="sim-prob-val">{res["home_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">Fair {res["home_ml_dec"]}</span></span></div>'
+            f'<div class="quant-subcard"><div class="quant-subcard-header"><span>🏆 MONEYLINE (MODELO vs CASAS vs ESPN)</span><span style="color:#00F5D4;">FAIR ODDS DECIMALES</span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(away_abbr, 20)}{away_abbr} (Visita)</span><span><span class="sim-prob-val">{res["away_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">Casas {p_casas_a:.1f}% | ESPN {p_espn_a:.1f}%</span></span></div>'
+            f'<div class="sim-stat-line"><span class="sim-team-label">{escudo_nba_html(home_abbr, 20)}{home_abbr} (Local)</span><span><span class="sim-prob-val">{res["home_win_prob"]*100:.1f}%</span><span class="sim-odds-badge">Casas {p_casas_h:.1f}% | ESPN {p_espn_h:.1f}%</span></span></div>'
             f'<div class="quant-bar-track"><div class="quant-bar-fill-left" style="width: {res["away_win_prob"]*100:.1f}%;"></div><div class="quant-bar-fill-right" style="width: {res["home_win_prob"]*100:.1f}%;"></div></div>'
-            f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-top:4px;">Diferencial Esperado: <strong style="color:#F8FAFC;">{home_abbr} {-res["proj_spread_home"]:+.1f} pts</strong></div></div>',
+            f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; color:#94A3B8; margin-top:4px;">Diferencial Esperado: <strong style="color:#F8FAFC;">{home_abbr} {-res["proj_spread_home"]:+.1f} pts</strong> | Fair: {away_abbr} {res["away_ml_dec"]} / {home_abbr} {res["home_ml_dec"]}</div></div>',
             unsafe_allow_html=True,
         )
     with f1_c2:

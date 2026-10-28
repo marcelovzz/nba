@@ -1503,6 +1503,193 @@ def simulate_player_prop(
     }
 
 
+
+# Mapa de nombres cortos por franquicia para el bloque de desglose de 5,000 simulaciones
+SHORT_TEAM_NAME_BY_ABBR: Dict[str, str] = {
+    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte", "CHI": "Chicago",
+    "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver", "DET": "Detroit", "GSW": "Golden State",
+    "HOU": "Houston", "IND": "Indiana", "LAC": "LA Clippers", "LAL": "LA Lakers", "MEM": "Memphis",
+    "MIA": "Miami", "MIL": "Milwaukee", "MIN": "Minnesota", "NOP": "New Orleans", "NYK": "New York",
+    "OKC": "Oklahoma City", "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix", "POR": "Portland",
+    "SAC": "Sacramento", "SAS": "San Antonio", "TOR": "Toronto", "UTA": "Utah", "WAS": "Washington",
+}
+
+
+def calcular_desglose_5000_simulaciones(
+    away_abbr: str,
+    home_abbr: str,
+    away_row: pd.Series,
+    home_row: pd.Series,
+    away_pts_sim: np.ndarray,
+    home_pts_sim: np.ndarray,
+    spread_line_home: float,
+    total_line: float,
+    cuota_spread_home_decimal: float = 1.91,
+    cuota_spread_away_decimal: float = 1.91,
+    cuota_over_decimal: float = 1.91,
+    cuota_under_decimal: float = 1.91,
+    mkt_info: Optional[Dict[str, Any]] = None,
+    valor_spread: Optional[Dict[str, Any]] = None,
+    valor_totales: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    A partir de las 5,000 simulaciones de puntos de cada equipo (`away_pts_sim`, `home_pts_sim`),
+    calcula y extrae dinámicamente para cada juego:
+      1. Moneyline: Probabilidad del modelo vs Probabilidad implícita de las casas de apuestas vs Índice Predictor de ESPN BPI.
+      2. Spread / Handicap: Porcentaje exacto de cubrir la línea del partido (ej. 'Boston cubre -1.5 en 42.0%').
+      3. Total de Puntos (Over/Under): Porcentaje exacto de superar la línea establecida por los sportsbooks (ej. 'Más de 222.5 en 51.0%').
+    Incluye banderas de ventaja matemática (+EV) para resaltar en verde neón (#00ffcc / #2bd99f).
+    """
+    n_sims = int(len(home_pts_sim))
+    a_abbr = str(away_abbr).strip().upper()
+    h_abbr = str(home_abbr).strip().upper()
+    a_short = SHORT_TEAM_NAME_BY_ABBR.get(a_abbr, str(away_row.get("Team", a_abbr)))
+    h_short = SHORT_TEAM_NAME_BY_ABBR.get(h_abbr, str(home_row.get("Team", h_abbr)))
+
+    margin_sim = home_pts_sim - away_pts_sim
+    total_pts_sim = home_pts_sim + away_pts_sim
+
+    # 1. MONEYLINE: Modelo vs Casas vs ESPN BPI
+    home_win_prob_mod = float(np.mean(margin_sim > 0)) * 100.0
+    away_win_prob_mod = 100.0 - home_win_prob_mod
+
+    info = mkt_info or {}
+    sp_home = round(float(spread_line_home), 1)
+    sp_away = round(-sp_home, 1)
+    tot_line = round(float(total_line), 1)
+
+    if info.get("prob_casas_home_pct") is not None and info.get("prob_casas_away_pct") is not None:
+        prob_casas_home = float(info["prob_casas_home_pct"])
+        prob_casas_away = float(info["prob_casas_away_pct"])
+    else:
+        p_h_mkt = float(np.clip(_normal_cdf(-sp_home / 11.5), 0.05, 0.95))
+        prob_casas_home = round(p_h_mkt * 100.0, 1)
+        prob_casas_away = round(100.0 - prob_casas_home, 1)
+
+    if info.get("cuota_ml_home_decimal") is not None and info.get("cuota_ml_away_decimal") is not None:
+        cuota_ml_home = float(info["cuota_ml_home_decimal"])
+        cuota_ml_away = float(info["cuota_ml_away_decimal"])
+    else:
+        cuota_ml_home = round(max(1.04, 1.0 / min(0.96, (prob_casas_home / 100.0) * 1.022)), 2)
+        cuota_ml_away = round(max(1.04, 1.0 / min(0.96, (prob_casas_away / 100.0) * 1.022)), 2)
+
+    if info.get("espn_bpi_home_pct") is not None and info.get("espn_bpi_away_pct") is not None:
+        espn_bpi_home = float(info["espn_bpi_home_pct"])
+        espn_bpi_away = float(info["espn_bpi_away_pct"])
+    else:
+        a_net = float(away_row.get("Base_Off_Rtg", away_row["Off_Rtg"])) - float(away_row.get("Base_Def_Rtg", away_row["Def_Rtg"]))
+        h_net = float(home_row.get("Base_Off_Rtg", home_row["Off_Rtg"])) - float(home_row.get("Base_Def_Rtg", home_row["Def_Rtg"]))
+        bpi_margin_h = 0.68 * ((h_net - a_net) * 0.92 + 2.75) + 0.32 * (-sp_home)
+        espn_bpi_home = round(float(np.clip(_normal_cdf(bpi_margin_h / 11.6), 0.04, 0.96)) * 100.0, 1)
+        espn_bpi_away = round(100.0 - espn_bpi_home, 1)
+
+    fav_is_home = home_win_prob_mod >= away_win_prob_mod
+    ml_abbr = h_abbr if fav_is_home else a_abbr
+    ml_equipo = h_short if fav_is_home else a_short
+    ml_prob_modelo = round(home_win_prob_mod if fav_is_home else away_win_prob_mod, 1)
+    ml_prob_casas = round(prob_casas_home if fav_is_home else prob_casas_away, 1)
+    ml_prob_espn = round(espn_bpi_home if fav_is_home else espn_bpi_away, 1)
+    ml_cuota_dec = cuota_ml_home if fav_is_home else cuota_ml_away
+    ml_edge_pct = round(ml_prob_modelo - ml_prob_casas, 1)
+    ml_ev_pct = round(((ml_prob_modelo / 100.0) * ml_cuota_dec - 1.0) * 100.0, 1)
+    ml_tiene_ev = bool(ml_edge_pct >= 1.8 or ml_ev_pct >= 2.0)
+
+    # 2. SPREAD / HANDICAP: Porcentaje exacto de cubrir la línea en las 5,000 simulaciones
+    home_cover_pct = round(float(np.mean((home_pts_sim + sp_home) > away_pts_sim)) * 100.0, 1)
+    away_cover_pct = round(100.0 - home_cover_pct, 1)
+
+    ev_sp_home = round(((home_cover_pct / 100.0) * float(cuota_spread_home_decimal) - 1.0) * 100.0, 1)
+    ev_sp_away = round(((away_cover_pct / 100.0) * float(cuota_spread_away_decimal) - 1.0) * 100.0, 1)
+
+    val_sp = valor_spread or {}
+    if val_sp.get("valor") and val_sp.get("lado") in {"HOME", "AWAY"}:
+        sp_pick_is_home = val_sp["lado"] == "HOME"
+    elif max(home_cover_pct, away_cover_pct) >= 53.0:
+        sp_pick_is_home = home_cover_pct >= away_cover_pct
+    else:
+        # Por defecto muestra el favorito de la línea de mercado (ej. Boston -1.5 en 42.0%)
+        sp_pick_is_home = sp_home <= 0.0
+
+    spread_abbr = h_abbr if sp_pick_is_home else a_abbr
+    spread_equipo = h_short if sp_pick_is_home else a_short
+    spread_linea_val = sp_home if sp_pick_is_home else sp_away
+    spread_linea_str = f"{spread_linea_val:+.1f}"
+    spread_prob_cubre = home_cover_pct if sp_pick_is_home else away_cover_pct
+    spread_cuota_dec = float(cuota_spread_home_decimal if sp_pick_is_home else cuota_spread_away_decimal)
+    spread_ev_pct = ev_sp_home if sp_pick_is_home else ev_sp_away
+    spread_tiene_ev = bool(val_sp.get("valor", False) or (spread_prob_cubre >= 52.8 and spread_ev_pct > 0.5))
+
+    # También guardamos el texto del favorito de mercado explícito (ej. "Boston cubre -1.5 en 42.0%")
+    mkt_fav_is_home = sp_home <= 0.0
+    mkt_fav_equipo = h_short if mkt_fav_is_home else a_short
+    mkt_fav_linea_str = f"{(sp_home if mkt_fav_is_home else sp_away):+.1f}"
+    mkt_fav_cover_pct = home_cover_pct if mkt_fav_is_home else away_cover_pct
+
+    # 3. TOTAL DE PUNTOS (OVER/UNDER): Porcentaje exacto de superar la línea en las 5,000 simulaciones
+    over_pct = round(float(np.mean(total_pts_sim > tot_line)) * 100.0, 1)
+    under_pct = round(100.0 - over_pct, 1)
+    ev_over_pct = round(((over_pct / 100.0) * float(cuota_over_decimal) - 1.0) * 100.0, 1)
+    ev_under_pct = round(((under_pct / 100.0) * float(cuota_under_decimal) - 1.0) * 100.0, 1)
+
+    val_tot = valor_totales or {}
+    total_tiene_ev = bool(
+        val_tot.get("valor", False)
+        or (over_pct >= 52.8 and ev_over_pct > 0.5)
+        or (under_pct >= 52.8 and ev_under_pct > 0.5)
+    )
+    total_lado_ev = (
+        str(val_tot.get("pick"))
+        if val_tot.get("valor")
+        else ("OVER" if over_pct >= under_pct else "UNDER")
+    )
+
+    return {
+        "n_sims": n_sims,
+        "titulo_bloque": f"📊 DESGLOSE {n_sims:,} SIMULACIONES (MONTE CARLO)",
+        # Moneyline
+        "ml_abbr": ml_abbr,
+        "ml_equipo": ml_equipo,
+        "ml_prob_modelo": ml_prob_modelo,
+        "ml_prob_casas": ml_prob_casas,
+        "ml_prob_espn": ml_prob_espn,
+        "ml_cuota_decimal": ml_cuota_dec,
+        "ml_edge_pct": ml_edge_pct,
+        "ml_ev_pct": ml_ev_pct,
+        "ml_tiene_ev": ml_tiene_ev,
+        "prob_ml_home_modelo": round(home_win_prob_mod, 1),
+        "prob_ml_away_modelo": round(away_win_prob_mod, 1),
+        "prob_ml_home_casas": round(prob_casas_home, 1),
+        "prob_ml_away_casas": round(prob_casas_away, 1),
+        "prob_ml_home_espn": round(espn_bpi_home, 1),
+        "prob_ml_away_espn": round(espn_bpi_away, 1),
+        "linea_terminal_ml": f"🏀 Moneyline {ml_equipo}: {ml_prob_modelo:.1f}% | Casas: {ml_prob_casas:.1f}% | ESPN: {ml_prob_espn:.1f}%",
+        # Spread
+        "spread_abbr": spread_abbr,
+        "spread_equipo": spread_equipo,
+        "spread_linea": spread_linea_val,
+        "spread_linea_str": spread_linea_str,
+        "spread_prob_cubre": spread_prob_cubre,
+        "spread_cuota_decimal": spread_cuota_dec,
+        "spread_ev_pct": spread_ev_pct,
+        "spread_tiene_ev": spread_tiene_ev,
+        "home_cover_pct": home_cover_pct,
+        "away_cover_pct": away_cover_pct,
+        "texto_narrativo_spread": f"{spread_equipo} cubre {spread_linea_str} en {spread_prob_cubre:.1f}%",
+        "texto_favorito_spread": f"{mkt_fav_equipo} cubre {mkt_fav_linea_str} en {mkt_fav_cover_pct:.1f}%",
+        "linea_terminal_spread": f"🛡️ Spread {spread_equipo} ({spread_linea_str}): {spread_prob_cubre:.1f}% cubre",
+        # Total (Over/Under)
+        "total_linea": tot_line,
+        "over_pct": over_pct,
+        "under_pct": under_pct,
+        "ev_over_pct": ev_over_pct,
+        "ev_under_pct": ev_under_pct,
+        "total_tiene_ev": total_tiene_ev,
+        "total_lado_ev": total_lado_ev,
+        "texto_narrativo_total": f"Más de {tot_line:.1f} en {over_pct:.1f}%",
+        "linea_terminal_total": f"🎯 Total ({tot_line:.1f}): Más de {tot_line:.1f} en {over_pct:.1f}% (Menos: {under_pct:.1f}%)",
+    }
+
+
 def run_monte_carlo_matchup(
     away_row_raw: pd.Series,
     home_row_raw: pd.Series,
@@ -1668,6 +1855,24 @@ def run_monte_carlo_matchup(
         prob_away_cover_sim=away_cover_prob,
     )
 
+    desglose_5000_sims = calcular_desglose_5000_simulaciones(
+        away_abbr=away_abbr,
+        home_abbr=home_abbr,
+        away_row=away_row,
+        home_row=home_row,
+        away_pts_sim=away_pts_sim,
+        home_pts_sim=home_pts_sim,
+        spread_line_home=spread_line_home,
+        total_line=total_line,
+        cuota_spread_home_decimal=cuota_spread_home_decimal,
+        cuota_spread_away_decimal=cuota_spread_away_decimal,
+        cuota_over_decimal=cuota_over_decimal,
+        cuota_under_decimal=cuota_under_decimal,
+        mkt_info=mkt_info,
+        valor_spread=valor_spread,
+        valor_totales=valor_totales,
+    )
+
     fav_is_home = home_win_prob >= away_win_prob
     fav_abbr = home_abbr if fav_is_home else away_abbr
     fav_name = str(home_row["Team"]) if fav_is_home else str(away_row["Team"])
@@ -1762,6 +1967,7 @@ def run_monte_carlo_matchup(
         "odds_source_label": odds_source_label,
         "valor_totales": valor_totales,
         "valor_spread": valor_spread,
+        "desglose_5000_sims": desglose_5000_sims,
         "away_win_prob": away_win_prob,
         "home_win_prob": home_win_prob,
         "away_ml_dec": away_ml_dec,
