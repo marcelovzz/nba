@@ -1,5 +1,6 @@
 import io
 import math
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
@@ -9,6 +10,15 @@ try:
 except ImportError:
     st = None
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+from sync_injuries_nba import (
+    normalizar_nombre_jugador_nba,
+    obtener_reporte_lesiones_nba,
+)
+
+MAX_PLAYER_PROJECTED_MINUTES = 42.0
+TEAM_TOTAL_GAME_MINUTES = 240.0
+DEFAULT_ROSTERS_EXCEL_FILENAME = "nba_rosters_plantilla.xlsx"
 
 LEAGUE_AVG_ORTG = 115.5
 LEAGUE_AVG_PACE = 99.0
@@ -983,11 +993,375 @@ def generar_dataframe_plantilla_excel(
     return df_out
 
 
-def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) -> Dict[str, pd.DataFrame]:
+# ==============================================================================
+# GESTIÓN AUTOMÁTICA DE LESIONES ESPN Y REASIGNACIÓN PROPORCIONAL DE MINUTOS
+# ==============================================================================
+def _es_fila_banca(pos_value: Any) -> bool:
+    """Identifica si una fila corresponde a la unidad agregada de banca/rotación."""
+    return str(pos_value or "").strip().upper() in {
+        "BENCH",
+        "BANCA",
+        "BN",
+        "ROTACION",
+        "ROTACIÓN",
+    }
+
+
+def redistribuir_minutos_equipo_por_lesiones(
+    df_team: pd.DataFrame,
+    lesiones_equipo: Optional[List[Dict[str, Any]]] = None,
+    team_abbr: str = "",
+    max_minutos_jugador: float = MAX_PLAYER_PROJECTED_MINUTES,
+    total_minutos_partido: float = TEAM_TOTAL_GAME_MINUTES,
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """
-    Valida y parsea el DataFrame cargado desde Excel (.xlsx).
-    Soporta o deriva automáticamente las métricas base por jugador:
-      - 'PPG_Base', 'RPG_Base', 'APG_Base' y 'Minutos_Base'.
+    Cruza los jugadores del equipo con el reporte oficial de lesiones de ESPN ('Out' / 'Doubtful'):
+      1. Si un jugador individual está descartado ('Out' o 'Doubtful'), reduce sus minutos a 0.0.
+      2. Redistribuye sus minutos de forma proporcional entre los jugadores activos del mismo equipo,
+         garantizando matemáticamente que:
+           - La rotación total del equipo sume exactamente 240.0 minutos por partido.
+           - Ningún jugador individual supere los 42.0 minutos proyectados.
+    """
+    if df_team is None or df_team.empty:
+        return df_team, []
+
+    df_adj = df_team.copy().reset_index(drop=True)
+    abbr_clean = str(team_abbr or "").strip().upper()
+    mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_adj.columns else "Minutos"
+    pos_col = "Posición" if "Posición" in df_adj.columns else "Pos"
+
+    mapa_bajas: Dict[str, Dict[str, Any]] = {}
+    for item in lesiones_equipo or []:
+        if not isinstance(item, dict):
+            continue
+        st_val = str(item.get("status", "")).strip().title()
+        if st_val not in {"Out", "Doubtful"}:
+            continue
+        norm_p = str(item.get("jugador_norm") or normalizar_nombre_jugador_nba(str(item.get("jugador", "")))).strip()
+        if norm_p:
+            mapa_bajas[norm_p] = item
+
+    # Si una fila había sido puesta en 0.0 automáticamente en una corrida previa y hoy ya está sana,
+    # restaurar sus Minutos_Base antes de recalcular la rotación activa.
+    if "Baja_Descontada" in df_adj.columns and "Minutos_Base" in df_adj.columns:
+        for idx_r in range(len(df_adj)):
+            prev_disc = bool(df_adj.loc[idx_r, "Baja_Descontada"])
+            p_norm_chk = normalizar_nombre_jugador_nba(str(df_adj.loc[idx_r, "Jugador"]))
+            if prev_disc and p_norm_chk not in mapa_bajas and not _es_fila_banca(df_adj.loc[idx_r, pos_col]):
+                base_restore = float(df_adj.loc[idx_r, "Minutos_Base"])
+                if base_restore > 0.0:
+                    df_adj.loc[idx_r, mins_col] = round(base_restore, 1)
+
+    n_rows = len(df_adj)
+    raw_mins = pd.to_numeric(df_adj[mins_col], errors="coerce").fillna(0.0).clip(lower=0.0).tolist()
+    base_mins = (
+        pd.to_numeric(df_adj["Minutos_Base"], errors="coerce").fillna(0.0).clip(lower=0.0).tolist()
+        if "Minutos_Base" in df_adj.columns
+        else list(raw_mins)
+    )
+
+    is_bench: List[bool] = []
+    is_out: List[bool] = []
+    estados_col: List[str] = []
+    detalles_col: List[str] = []
+    minutos_desc_col: List[float] = []
+    bajas_aplicadas: List[Dict[str, Any]] = []
+
+    for i in range(n_rows):
+        pos_val = str(df_adj.loc[i, pos_col]).strip()
+        p_name = str(df_adj.loc[i, "Jugador"]).strip()
+        bench_flag = _es_fila_banca(pos_val)
+        is_bench.append(bench_flag)
+
+        p_norm = normalizar_nombre_jugador_nba(p_name)
+        if not bench_flag and p_norm and p_norm in mapa_bajas:
+            inj_info = mapa_bajas[p_norm]
+            orig_m = raw_mins[i] if raw_mins[i] > 0.0 else (base_mins[i] if base_mins[i] > 0.0 else 0.0)
+            is_out.append(True)
+            raw_mins[i] = 0.0
+            status_lbl = str(inj_info.get("status", "Out"))
+            detalle_lbl = str(inj_info.get("detalle", "")).strip()
+            estados_col.append(status_lbl)
+            detalles_col.append(detalle_lbl)
+            minutos_desc_col.append(round(float(orig_m), 1))
+            bajas_aplicadas.append(
+                {
+                    "team_abbr": abbr_clean,
+                    "jugador": p_name,
+                    "pos": pos_val.upper(),
+                    "status": status_lbl,
+                    "detalle": detalle_lbl,
+                    "minutos_descontados": round(float(orig_m), 1),
+                }
+            )
+        else:
+            is_out.append(False)
+            estados_col.append("")
+            detalles_col.append("")
+            minutos_desc_col.append(0.0)
+
+    df_adj["Estado_Lesion"] = estados_col
+    df_adj["Detalle_Lesion"] = detalles_col
+    df_adj["Baja_Descontada"] = is_out
+    df_adj["Minutos_Descontados"] = minutos_desc_col
+
+    active_idx = [i for i in range(n_rows) if not is_out[i]]
+    caps: Dict[int, float] = {
+        i: (0.0 if is_out[i] else (float(total_minutos_partido) if is_bench[i] else float(max_minutos_jugador)))
+        for i in range(n_rows)
+    }
+
+    # Si un Excel personalizado no tiene fila agregada de Banca y tiene pocos titulares activos
+    # cuya capacidad (N * 42.0) no alcanza 240.0 min, agregamos unidad de banca de emergencia
+    # para respetar simultáneamente sum == 240.0 y max_individual <= 42.0.
+    max_active_capacity = sum(caps[i] for i in active_idx)
+    if max_active_capacity < float(total_minutos_partido) - 1e-6:
+        emerg_row: Dict[str, Any] = {col: 0.0 for col in df_adj.columns}
+        emerg_row[pos_col] = "BENCH" if pos_col == "Posición" else "Banca"
+        emerg_row["Jugador"] = "Rotación Banca Emergencia"
+        emerg_row[mins_col] = 10.0
+        if "Minutos_Base" in df_adj.columns:
+            emerg_row["Minutos_Base"] = 10.0
+        if "O_EPM" in df_adj.columns:
+            emerg_row["O_EPM"] = -1.6
+        if "D_EPM" in df_adj.columns:
+            emerg_row["D_EPM"] = -1.0
+        if "Es_Estrella" in df_adj.columns:
+            emerg_row["Es_Estrella"] = False
+        emerg_row["Estado_Lesion"] = ""
+        emerg_row["Detalle_Lesion"] = ""
+        emerg_row["Baja_Descontada"] = False
+        emerg_row["Minutos_Descontados"] = 0.0
+        df_adj = pd.concat([df_adj, pd.DataFrame([emerg_row])], ignore_index=True)
+
+        new_i = len(df_adj) - 1
+        n_rows = len(df_adj)
+        raw_mins.append(10.0)
+        base_mins.append(10.0)
+        is_bench.append(True)
+        is_out.append(False)
+        active_idx.append(new_i)
+        caps[new_i] = float(total_minutos_partido)
+
+    current_active_sum = sum(raw_mins[i] for i in active_idx)
+    any_over_cap = any((not is_bench[i]) and raw_mins[i] > float(max_minutos_jugador) + 1e-6 for i in active_idx)
+    needs_redistribution = (
+        any(is_out)
+        or abs(current_active_sum - float(total_minutos_partido)) > 0.05
+        or any_over_cap
+    )
+
+    if not needs_redistribution:
+        df_adj[mins_col] = [round(float(m), 1) for m in raw_mins]
+        if "Minutos" in df_adj.columns and mins_col != "Minutos":
+            df_adj["Minutos"] = df_adj[mins_col]
+        return df_adj, bajas_aplicadas
+
+    weights: Dict[int, float] = {}
+    for i in active_idx:
+        w = raw_mins[i] if raw_mins[i] > 0.0 else (base_mins[i] if base_mins[i] > 0.0 else 1.0)
+        weights[i] = float(max(w, 0.1))
+
+    # Water-filling iterativo proporcional respetando tope estricto de 42.0 min por jugador individual
+    remaining_indices = list(active_idx)
+    remaining_minutes = float(total_minutos_partido)
+    exact_alloc: Dict[int, float] = {i: 0.0 for i in range(n_rows)}
+
+    while remaining_indices and remaining_minutes > 1e-9:
+        w_sum = sum(weights[i] for i in remaining_indices)
+        if w_sum <= 1e-9:
+            for i in remaining_indices:
+                weights[i] = 1.0
+            w_sum = float(len(remaining_indices))
+
+        provisional = {
+            i: remaining_minutes * (weights[i] / w_sum)
+            for i in remaining_indices
+        }
+        over_cap = [i for i in remaining_indices if provisional[i] > caps[i] + 1e-9]
+        if not over_cap:
+            for i in remaining_indices:
+                exact_alloc[i] = min(caps[i], provisional[i])
+            remaining_minutes = 0.0
+            break
+
+        for i in over_cap:
+            exact_alloc[i] = caps[i]
+            remaining_minutes = max(0.0, remaining_minutes - caps[i])
+            remaining_indices.remove(i)
+
+    # Redondeo exacto por método de restos mayores (Hamilton en décimas de minuto) para garantizar
+    # suma exacta == 240.0 min (2400 décimas) y ningún jugador individual > 42.0 min (420 décimas).
+    target_tenths = int(round(float(total_minutos_partido) * 10))
+    cap_tenths = {i: int(round(caps[i] * 10)) for i in range(n_rows)}
+    tenths_alloc: Dict[int, int] = {}
+    remainders: Dict[int, float] = {}
+
+    for i in range(n_rows):
+        if i not in active_idx:
+            tenths_alloc[i] = 0
+            remainders[i] = 0.0
+        else:
+            scaled = exact_alloc[i] * 10.0
+            fl = min(int(math.floor(scaled + 1e-9)), cap_tenths[i])
+            tenths_alloc[i] = max(0, fl)
+            remainders[i] = scaled - fl
+
+    diff_tenths = target_tenths - sum(tenths_alloc.values())
+    if diff_tenths > 0:
+        eligible = sorted(
+            [i for i in active_idx if tenths_alloc[i] < cap_tenths[i]],
+            key=lambda idx: (remainders[idx], 1 if is_bench[idx] else 0, weights.get(idx, 0.0)),
+            reverse=True,
+        )
+        step_k = 0
+        while diff_tenths > 0 and eligible:
+            chosen = eligible[step_k % len(eligible)]
+            if tenths_alloc[chosen] < cap_tenths[chosen]:
+                tenths_alloc[chosen] += 1
+                diff_tenths -= 1
+            eligible = [i for i in eligible if tenths_alloc[i] < cap_tenths[i]]
+            step_k += 1
+    elif diff_tenths < 0:
+        removable = sorted(
+            [i for i in active_idx if tenths_alloc[i] > 0],
+            key=lambda idx: (remainders[idx], 0 if is_bench[idx] else 1),
+        )
+        step_k = 0
+        while diff_tenths < 0 and removable:
+            chosen = removable[step_k % len(removable)]
+            if tenths_alloc[chosen] > 0:
+                tenths_alloc[chosen] -= 1
+                diff_tenths += 1
+            removable = [i for i in removable if tenths_alloc[i] > 0]
+            step_k += 1
+
+    final_mins = [round(tenths_alloc[i] / 10.0, 1) for i in range(n_rows)]
+    df_adj[mins_col] = final_mins
+    if "Minutos" in df_adj.columns and mins_col != "Minutos":
+        df_adj["Minutos"] = final_mins
+
+    return df_adj, bajas_aplicadas
+
+
+def _st_session_disponible() -> bool:
+    """Verifica si existe un runtime activo de Streamlit antes de acceder a st.session_state."""
+    if st is None or not hasattr(st, "session_state"):
+        return False
+    try:
+        if hasattr(st, "runtime") and hasattr(st.runtime, "exists"):
+            return bool(st.runtime.exists())
+    except Exception:
+        return False
+    return False
+
+
+def extraer_bajas_detectadas_equipo(
+    df_lineup: Optional[pd.DataFrame],
+    team_abbr: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Extrae la lista de bajas ('Out' / 'Doubtful') efectivamente descontadas a 0.0 minutos
+    por el motor en el DataFrame de rotación de un equipo.
+    """
+    abbr_up = str(team_abbr or "").strip().upper()
+    if df_lineup is None or not isinstance(df_lineup, pd.DataFrame) or df_lineup.empty:
+        return []
+
+    mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_lineup.columns else "Minutos"
+    pos_col = "Posición" if "Posición" in df_lineup.columns else "Pos"
+
+    if "Baja_Descontada" in df_lineup.columns:
+        bajas_list: List[Dict[str, Any]] = []
+        for _, r in df_lineup.iterrows():
+            if bool(r.get("Baja_Descontada", False)):
+                cur_m = float(pd.to_numeric(r.get(mins_col, 0.0), errors="coerce") or 0.0)
+                if cur_m <= 0.05:
+                    bajas_list.append(
+                        {
+                            "team_abbr": abbr_up,
+                            "jugador": str(r.get("Jugador", "")).strip(),
+                            "pos": str(r.get(pos_col, "")).strip().upper(),
+                            "status": str(r.get("Estado_Lesion", "Out") or "Out").strip(),
+                            "detalle": str(r.get("Detalle_Lesion", "") or "").strip(),
+                            "minutos_descontados": round(
+                                float(r.get("Minutos_Descontados", r.get("Minutos_Base", 0.0)) or 0.0),
+                                1,
+                            ),
+                        }
+                    )
+        return bajas_list
+
+    if _st_session_disponible() and "bajas_detectadas_nba" in st.session_state:
+        stored = st.session_state.bajas_detectadas_nba
+        if isinstance(stored, dict) and abbr_up in stored:
+            return list(stored[abbr_up])
+
+    return []
+
+
+def extraer_bajas_detectadas_de_lineups(
+    lineups_dict: Dict[str, pd.DataFrame],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Recopila todas las bajas descontadas por franquicia a partir de un diccionario de lineups."""
+    bajas_map: Dict[str, List[Dict[str, Any]]] = {}
+    for abbr, lu_df in (lineups_dict or {}).items():
+        bajas_eq = extraer_bajas_detectadas_equipo(lu_df, team_abbr=abbr)
+        if bajas_eq:
+            bajas_map[str(abbr).strip().upper()] = bajas_eq
+    return bajas_map
+
+
+def aplicar_lesiones_a_lineups(
+    lineups_dict: Dict[str, pd.DataFrame],
+    reporte_lesiones: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    max_minutos_jugador: float = MAX_PLAYER_PROJECTED_MINUTES,
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, List[Dict[str, Any]]]]:
+    """
+    Aplica el reporte oficial de lesiones de ESPN ('Out' / 'Doubtful') sobre los quintetos de las
+    30 franquicias NBA, reduciendo a 0.0 los jugadores descartados y redistribuyendo sus minutos
+    proporcionalmente (suma exacta 240.0 min por equipo, tope 42.0 min por jugador).
+    """
+    rep = reporte_lesiones if reporte_lesiones is not None else obtener_reporte_lesiones_nba()
+    adjusted_dict: Dict[str, pd.DataFrame] = {}
+    bajas_por_equipo: Dict[str, List[Dict[str, Any]]] = {}
+
+    for abbr, lu_df in (lineups_dict or {}).items():
+        t_code = str(abbr).strip().upper()
+        lesiones_eq = rep.get(t_code, []) if isinstance(rep, dict) else []
+        adj_df, bajas_eq = redistribuir_minutos_equipo_por_lesiones(
+            df_team=lu_df,
+            lesiones_equipo=lesiones_eq,
+            team_abbr=t_code,
+            max_minutos_jugador=max_minutos_jugador,
+            total_minutos_partido=TEAM_TOTAL_GAME_MINUTES,
+        )
+        adjusted_dict[t_code] = adj_df
+        if bajas_eq:
+            bajas_por_equipo[t_code] = bajas_eq
+
+    if _st_session_disponible():
+        st.session_state.bajas_detectadas_nba = bajas_por_equipo
+        if isinstance(rep, dict):
+            st.session_state.reporte_lesiones_nba = rep
+
+    return adjusted_dict, bajas_por_equipo
+
+
+def parsear_excel_a_lineups(
+    df_excel: pd.DataFrame,
+    strict_240: bool = False,
+    aplicar_lesiones: bool = True,
+    reporte_lesiones: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Valida y parsea el DataFrame cargado desde Excel (.xlsx), como 'nba_rosters_plantilla.xlsx'.
+    - Deriva o preserva automáticamente las métricas base por jugador:
+      'PPG_Base', 'RPG_Base', 'APG_Base' y 'Minutos_Base'.
+    - Cuando `aplicar_lesiones=True` (por defecto), cruza automáticamente los jugadores con el
+      Injury Report de ESPN ('Out' o 'Doubtful'), reduce a 0.0 los minutos de los descartados y
+      redistribuye sus minutos proporcionalmente entre los activos del mismo equipo garantizando
+      240.0 minutos exactos de rotación total y máximo 42.0 minutos por jugador individual.
     """
     if df_excel is None or not isinstance(df_excel, pd.DataFrame) or df_excel.empty:
         raise ValueError("El archivo Excel subido está vacío o no contiene una tabla válida.")
@@ -1033,7 +1407,7 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
         team_rows: List[Dict] = []
         for _, row in group.iterrows():
             raw_pos = str(row["Pos"]).strip().upper()
-            internal_pos = "BENCH" if raw_pos in {"BANCA", "BENCH", "BN", "ROTACION", "ROTACIÓN"} else raw_pos
+            internal_pos = "BENCH" if _es_fila_banca(raw_pos) else raw_pos
             p_name = str(row["Jugador"]).strip()
             mins_val = round(float(row["Minutos"]), 1)
             o_epm_val = round(float(row["O_EPM"]), 1)
@@ -1043,6 +1417,8 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
 
             if has_min_base and pd.notna(row.get("Minutos_Base")) and float(row["Minutos_Base"]) > 0:
                 mins_base_val = round(float(row["Minutos_Base"]), 1)
+            elif mins_val > 0:
+                mins_base_val = round(mins_val, 1)
             else:
                 mins_base_val = round(def_mins if def_mins > 0 else 34.0, 1)
 
@@ -1085,7 +1461,80 @@ def parsear_excel_a_lineups(df_excel: pd.DataFrame, strict_240: bool = False) ->
 
         lineups_parsed[team_abbr] = pd.DataFrame(team_rows)
 
+    if aplicar_lesiones:
+        lineups_parsed, _ = aplicar_lesiones_a_lineups(
+            lineups_dict=lineups_parsed,
+            reporte_lesiones=reporte_lesiones,
+            max_minutos_jugador=MAX_PLAYER_PROJECTED_MINUTES,
+        )
+
     return lineups_parsed
+
+
+def cargar_rosters_plantilla_excel(
+    excel_source: Optional[Any] = None,
+    aplicar_lesiones: bool = True,
+    reporte_lesiones: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, List[Dict[str, Any]]], str]:
+    """
+    Carga 'nba_rosters_plantilla.xlsx' (desde disco local o un buffer subido), cruza automáticamente
+    todos los jugadores con el Injury Report oficial de ESPN ('Out' / 'Doubtful') y reasigna
+    proporcionalmente los minutos (240.0 min exactos por equipo, tope 42.0 min por jugador).
+    Si el archivo local no existe, opera sobre los quintetos base aplicando igualmente el filtro de lesiones.
+    Retorna: `(lineups_dict, bajas_por_equipo, fuente_label)`.
+    """
+    rep = reporte_lesiones if reporte_lesiones is not None else (
+        obtener_reporte_lesiones_nba() if aplicar_lesiones else {}
+    )
+
+    df_excel: Optional[pd.DataFrame] = None
+    source_name = DEFAULT_ROSTERS_EXCEL_FILENAME
+
+    if excel_source is not None:
+        if isinstance(excel_source, pd.DataFrame):
+            df_excel = excel_source.copy()
+        elif isinstance(excel_source, (bytes, bytearray)):
+            df_excel = pd.read_excel(io.BytesIO(excel_source))
+        else:
+            df_excel = pd.read_excel(excel_source)
+            source_name = getattr(excel_source, "name", str(excel_source))
+    else:
+        candidate_paths = [
+            Path(DEFAULT_ROSTERS_EXCEL_FILENAME),
+            Path(__file__).resolve().parent / DEFAULT_ROSTERS_EXCEL_FILENAME,
+        ]
+        for path in candidate_paths:
+            if path.exists():
+                try:
+                    df_excel = pd.read_excel(path)
+                    source_name = path.name
+                    break
+                except Exception:
+                    df_excel = None
+
+    if df_excel is not None and not df_excel.empty:
+        lineups_dict = parsear_excel_a_lineups(
+            df_excel=df_excel,
+            strict_240=False,
+            aplicar_lesiones=aplicar_lesiones,
+            reporte_lesiones=rep,
+        )
+        bajas_map = extraer_bajas_detectadas_de_lineups(lineups_dict)
+        total_bajas = sum(len(v) for v in bajas_map.values())
+        label = (
+            f"{source_name} + ESPN Injuries ({total_bajas} bajas desc.)"
+            if aplicar_lesiones
+            else f"{source_name}"
+        )
+        return lineups_dict, bajas_map, label
+
+    base_lu = build_default_lineups_dict()
+    if aplicar_lesiones:
+        base_lu, bajas_map = aplicar_lesiones_a_lineups(base_lu, reporte_lesiones=rep)
+        total_bajas = sum(len(v) for v in bajas_map.values())
+        return base_lu, bajas_map, f"Quintetos Base + ESPN Injuries ({total_bajas} bajas desc.)"
+
+    return base_lu, {}, "Quintetos Base (30 Equipos)"
 
 
 def construir_excel_plantilla_bytes(
@@ -1716,6 +2165,11 @@ def run_monte_carlo_matchup(
     if home_lineup is None:
         home_lineup = obtener_lineup_en_sesion(home_abbr)
 
+    bajas_away = extraer_bajas_detectadas_equipo(away_lineup, team_abbr=away_abbr)
+    bajas_home = extraer_bajas_detectadas_equipo(home_lineup, team_abbr=home_abbr)
+    bajas_partido = bajas_away + bajas_home
+    bajas_nombres = [str(item["jugador"]) for item in bajas_partido if item.get("jugador")]
+
     away_row = apply_lineup_to_team_row(away_row_raw, away_lineup)
     home_row = apply_lineup_to_team_row(home_row_raw, home_lineup)
 
@@ -2004,6 +2458,10 @@ def run_monte_carlo_matchup(
         "home_pnr_delta": home_pnr_delta,
         "away_tactical_ortg_adj": away_tactical_ortg_adj,
         "home_tactical_ortg_adj": home_tactical_ortg_adj,
+        "bajas_away": bajas_away,
+        "bajas_home": bajas_home,
+        "bajas_partido": bajas_partido,
+        "bajas_nombres": bajas_nombres,
         "props": props_list,
     }
 
@@ -2163,6 +2621,17 @@ def build_nba_predictions_export_df(
         else:
             apuesta_str = " + ".join(apuestas_sugeridas)
 
+        bajas_partido_export = res.get("bajas_partido") or []
+        bajas_export_str = (
+            ", ".join(
+                f"{b['jugador']} ({b.get('team_abbr', '')} - {b.get('status', 'Out')})"
+                for b in bajas_partido_export
+                if b.get("jugador")
+            )
+            if bajas_partido_export
+            else "Sin bajas titulares"
+        )
+
         rows.append(
             {
                 "Fecha y Hora": fecha_hora_str,
@@ -2187,6 +2656,7 @@ def build_nba_predictions_export_df(
                 "% Over": pct_over,
                 "% Under": pct_under,
                 "Desglose Total (5K Sims)": str(desg.get("texto_narrativo_total", "")),
+                "Bajas Detectadas (ESPN)": bajas_export_str,
                 "Edge / EV% Detectado": edge_str,
                 "Apuesta Sugerida": apuesta_str,
             }

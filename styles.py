@@ -400,6 +400,103 @@ button[data-baseweb="tab"][aria-selected="true"] {
 div[data-testid="stExpander"] { background: rgba(11, 18, 35, 0.82); border: 1px solid rgba(0, 245, 212, 0.25); border-radius: 14px; margin-bottom: 14px; }
 .slate-slot-badge { font-family: 'Orbitron', sans-serif; font-size: 0.74rem; font-weight: 800; color: #00F5D4; background: rgba(0, 245, 212, 0.10); border: 1px solid rgba(0, 245, 212, 0.28); border-radius: 6px; padding: 4px 10px; display: inline-block; margin-bottom: 6px; }
 
+/* INDICADOR VISUAL Y LISTA COLAPSABLE DE BAJAS DETECTADAS (ESPN INJURY REPORT) */
+.injury-alert-details {
+    margin-top: 8px;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.14) 0%, rgba(15, 23, 42, 0.88) 100%);
+    border: 1px solid rgba(244, 63, 94, 0.45);
+    border-left: 3px solid #F43F5E;
+    border-radius: 10px;
+    padding: 7px 11px;
+    font-family: 'JetBrains Mono', monospace;
+}
+.injury-alert-details[open] {
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.18) 0%, rgba(10, 15, 29, 0.95) 100%);
+}
+.injury-alert-summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #FDA4AF;
+    line-height: 1.35;
+}
+.injury-alert-summary::-webkit-details-marker {
+    display: none;
+}
+.injury-alert-chevron {
+    font-size: 0.63rem;
+    font-weight: 700;
+    color: #FB7185;
+    background: rgba(244, 63, 94, 0.16);
+    border: 1px solid rgba(244, 63, 94, 0.35);
+    border-radius: 5px;
+    padding: 1px 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.injury-alert-list {
+    margin-top: 7px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(244, 63, 94, 0.30);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.injury-alert-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 0.69rem;
+    color: #E2E8F0;
+    background: rgba(5, 8, 17, 0.70);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+.injury-status-out {
+    font-size: 0.61rem;
+    font-weight: 800;
+    color: #FFF1F2;
+    background: #E11D48;
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+.injury-status-doubtful {
+    font-size: 0.61rem;
+    font-weight: 800;
+    color: #050811;
+    background: #F59E0B;
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+.injury-clean-pill {
+    margin-top: 8px;
+    margin-bottom: 4px;
+    padding: 6px 10px;
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    border-left: 3px solid #10B981;
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.69rem;
+    font-weight: 600;
+    color: #6EE7B7;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
 @media (max-width: 900px) {
     .scoreboard-tv-header { grid-template-columns: 1fr; text-align: center; }
     .sb-team-block, .sb-team-block.right { justify-content: center; text-align: center; }

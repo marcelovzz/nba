@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import hashlib
+import html
 import io
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -12,6 +13,10 @@ from styles import (
     format_edge_badge,
     inject_cyber_quant_css,
     render_form_pills_html,
+)
+from sync_injuries_nba import (
+    obtener_metadata_sincronizacion_lesiones,
+    obtener_reporte_lesiones_nba,
 )
 from sync_espn import (
     NBA_SEASON_TARGET,
@@ -28,16 +33,20 @@ from engine_nba import (
     GAME_SLATE_TIMES,
     LINEUP_COLS,
     ROSTER_EDITOR_COLS,
+    aplicar_lesiones_a_lineups,
     auditar_partido_nba,
     build_default_lineups_dict,
     build_nba_predictions_export_df,
     calibrar_ratings_nba,
     calcular_desglose_5000_simulaciones,
     calcular_ratings_lineup,
+    cargar_rosters_plantilla_excel,
     construir_excel_plantilla_bytes,
     evaluar_valor_spread_nba,
     evaluar_valor_totales_nba,
     export_nba_excel_bytes,
+    extraer_bajas_detectadas_de_lineups,
+    extraer_bajas_detectadas_equipo,
     extract_executive_radar,
     generar_dataframe_plantilla_excel,
     obtener_lineup_en_sesion,
@@ -253,6 +262,83 @@ def _construir_badge_prop_html(eval_mkt: Dict[str, Any]) -> str:
     )
 
 
+def _construir_bloque_bajas_lista_html(
+    bajas_lista: List[Dict[str, Any]],
+    expanded_default: bool = False,
+    mostrar_sin_bajas: bool = True,
+) -> str:
+    """
+    Construye el indicador visual / lista colapsable HTML con formato Cyber-Quant:
+      '🚨 Bajas Detectadas: [Jugador 1, Jugador 2]'
+    para transparentar al usuario qué ausencias ('Out' / 'Doubtful' en ESPN) ya descontó el motor
+    a 0.0 minutos y reasignó proporcionalmente en la rotación de 240.0 min (tope 42.0 min/jug).
+    Genera cada línea sin sangrías de 4 espacios para evitar bloques <pre><code> en Streamlit.
+    """
+    bajas_validas = [b for b in (bajas_lista or []) if isinstance(b, dict) and str(b.get("jugador", "")).strip()]
+    if not bajas_validas:
+        if not mostrar_sin_bajas:
+            return ""
+        return (
+            '<div class="injury-clean-pill">'
+            "<span>✅ Sin bajas titulares detectadas (Rotación 240.0m activa)</span>"
+            "<span>ESPN OK</span>"
+            "</div>"
+        )
+
+    nombres_str = ", ".join(html.escape(str(b.get("jugador", "")).strip()) for b in bajas_validas)
+    open_attr = " open" if expanded_default else ""
+    lines = [
+        f'<details class="injury-alert-details"{open_attr}>',
+        '<summary class="injury-alert-summary">',
+        f"<span>🚨 Bajas Detectadas: [{nombres_str}]</span>",
+        f'<span class="injury-alert-chevron">▼ {len(bajas_validas)} DESC.</span>',
+        "</summary>",
+        '<div class="injury-alert-list">',
+    ]
+
+    for b in bajas_validas:
+        t_ab = html.escape(str(b.get("team_abbr", "")).strip())
+        pos_s = html.escape(str(b.get("pos", "")).strip())
+        jug_s = html.escape(str(b.get("jugador", "")).strip())
+        st_raw = str(b.get("status", "Out") or "Out").strip()
+        st_cls = "injury-status-doubtful" if st_raw.lower() == "doubtful" else "injury-status-out"
+        min_desc = float(b.get("minutos_descontados", 0.0) or 0.0)
+        det_raw = str(b.get("detalle", "") or "").strip()
+        det_short = html.escape(det_raw[:64] + ("..." if len(det_raw) > 64 else "")) if det_raw else ""
+        det_html = f' <span style="color:#94A3B8;">&middot; {det_short}</span>' if det_short else ""
+        pos_html = f" ({pos_s})" if pos_s else ""
+
+        lines.append(
+            f'<div class="injury-alert-item">'
+            f'<span><strong style="color:#00F5D4;">{t_ab}</strong>{pos_html} <strong>{jug_s}</strong>{det_html}</span>'
+            f'<span><span class="{st_cls}">{html.escape(st_raw)}</span> '
+            f'<span style="color:#FDA4AF; margin-left:4px;">{min_desc:.1f}m &rarr; 0.0m</span></span>'
+            f"</div>"
+        )
+
+    lines.append(
+        '<div style="font-size:0.64rem; color:#94A3B8; padding:2px 4px 0 4px;">'
+        "⚙️ Minutos reasignados proporcionalmente entre rotación activa (240.0m exactos &bull; máx 42.0m/jug)."
+        "</div>"
+    )
+    lines.append("</div>")
+    lines.append("</details>")
+    return "\n".join(lines)
+
+
+def _construir_bloque_bajas_partido_html(
+    res: Dict[str, Any],
+    expanded_default: bool = False,
+) -> str:
+    """Construye el indicador colapsable '🚨 Bajas Detectadas: [...]' para la tarjeta de un partido."""
+    bajas_partido = list(res.get("bajas_partido") or [])
+    return _construir_bloque_bajas_lista_html(
+        bajas_lista=bajas_partido,
+        expanded_default=expanded_default,
+        mostrar_sin_bajas=True,
+    )
+
+
 def render_slate_grid_3x3(
     sim_results: List[Dict],
     slate_meta: Optional[List[Dict]] = None,
@@ -343,6 +429,7 @@ def render_slate_grid_3x3(
                 footer_left = f"PROY MC: {away_abbr} {res['exp_away_pts']:.1f} - {res['exp_home_pts']:.1f} {home_abbr}"
                 footer_right = f"{res['fav_abbr']} {fav_win_pct:.1f}% (Fair {fav_ml_dec})"
 
+            bajas_card_html = _construir_bloque_bajas_partido_html(res, expanded_default=False)
             desglose_mc = res.get("desglose_5000_sims") or {}
             mc_breakdown_html = build_mc_breakdown_terminal_html(desglose_mc)
 
@@ -380,6 +467,7 @@ def render_slate_grid_3x3(
                         f'<span class="grid-proj-pts">{res["exp_home_pts"]:.1f}</span>',
                         "</div>",
                         "</div>",
+                        bajas_card_html,
                         mc_breakdown_html,
                         '<div class="audit-market-box">',
                         '<div class="audit-market-row">',
@@ -423,6 +511,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
     current_lineup = full_team_df[LINEUP_COLS].copy()
     proj_off, proj_def, proj_pace = calcular_ratings_lineup(full_team_df, pace_base)
     total_mins = float(pd.to_numeric(current_lineup["Minutos_Esperados"], errors="coerce").fillna(0.0).sum())
+    bajas_equipo = extraer_bajas_detectadas_equipo(full_team_df, team_abbr=team_abbr)
 
     st.markdown(
         f"""
@@ -431,7 +520,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
                 {escudo_nba_html(team_abbr, 32)}
                 <div>
                     <div style="font-family:'Orbitron',sans-serif; font-size:0.92rem; font-weight:800; color:#F8FAFC;">QUINTETO {team_name.upper()} ({team_abbr})</div>
-                    <div style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; color:#94A3B8;">Minutos Asignados: <strong>{total_mins:.0f} / 240 min</strong> (Fuente: <code>st.session_state.lineups_nba</code>)</div>
+                    <div style="font-family:'JetBrains Mono',monospace; font-size:0.70rem; color:#94A3B8;">Minutos Asignados: <strong>{total_mins:.1f} / 240.0 min</strong> (Fuente: <code>st.session_state.lineups_nba</code>)</div>
                 </div>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -443,6 +532,12 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
         """,
         unsafe_allow_html=True,
     )
+
+    if bajas_equipo:
+        st.markdown(
+            _construir_bloque_bajas_lista_html(bajas_equipo, expanded_default=False, mostrar_sin_bajas=False),
+            unsafe_allow_html=True,
+        )
 
     v_key = st.session_state.lineup_editor_version
     edited_lineup = st.data_editor(
@@ -466,6 +561,7 @@ def render_team_lineup_editor_panel(team_name: str, team_abbr: str, pace_base: f
         for col in LINEUP_COLS:
             updated_full[col] = edited_lineup[col].values
         st.session_state.lineups_nba[team_abbr] = updated_full
+        st.session_state.bajas_detectadas_nba = extraer_bajas_detectadas_de_lineups(st.session_state.lineups_nba)
         st.session_state.df_nba = sincronizar_df_nba_con_lineups(st.session_state.df_nba, st.session_state.lineups_nba)
         st.rerun()
 
@@ -731,6 +827,11 @@ def render_detailed_matchup_dossier(res: Dict) -> None:
             </div>
         </div>
         """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        _construir_bloque_bajas_partido_html(res, expanded_default=True),
         unsafe_allow_html=True,
     )
 
@@ -1215,7 +1316,12 @@ def init_session_state() -> None:
     if "fecha_nba_str" not in st.session_state:
         st.session_state.fecha_nba_str = st.session_state.fecha_nba.strftime("%Y%m%d")
     if "lineups_nba" not in st.session_state:
-        st.session_state.lineups_nba = build_default_lineups_dict()
+        lineups_auto, bajas_auto, roster_src_lbl = cargar_rosters_plantilla_excel(aplicar_lesiones=True)
+        st.session_state.lineups_nba = lineups_auto
+        st.session_state.bajas_detectadas_nba = bajas_auto
+        st.session_state.roster_source_label = roster_src_lbl
+    if "bajas_detectadas_nba" not in st.session_state:
+        st.session_state.bajas_detectadas_nba = extraer_bajas_detectadas_de_lineups(st.session_state.lineups_nba)
     if "df_nba" not in st.session_state:
         sincronizar_datos_nba_api(season=NBA_SEASON_TARGET)
         st.session_state.df_nba = sincronizar_df_nba_con_lineups(
@@ -1263,7 +1369,10 @@ def init_session_state() -> None:
 
 
 def reset_all_lineups() -> None:
-    st.session_state.lineups_nba = build_default_lineups_dict()
+    lineups_auto, bajas_auto, roster_src_lbl = cargar_rosters_plantilla_excel(aplicar_lesiones=True)
+    st.session_state.lineups_nba = lineups_auto
+    st.session_state.bajas_detectadas_nba = bajas_auto
+    st.session_state.roster_source_label = roster_src_lbl
     st.session_state.df_nba = sincronizar_df_nba_con_lineups(
         st.session_state.df_nba, st.session_state.lineups_nba
     )
@@ -1310,7 +1419,10 @@ def render_live_roster_manager() -> None:
         with top_c2:
             if st.button("🔄 Restablecer Roster Oficial", use_container_width=True):
                 clean_df, src_label = load_clean_nba_dataframe()
-                st.session_state.lineups_nba = build_default_lineups_dict()
+                lineups_auto, bajas_auto, roster_src_lbl = cargar_rosters_plantilla_excel(aplicar_lesiones=True)
+                st.session_state.lineups_nba = lineups_auto
+                st.session_state.bajas_detectadas_nba = bajas_auto
+                st.session_state.roster_source_label = roster_src_lbl
                 st.session_state.df_nba = sincronizar_df_nba_con_lineups(clean_df, st.session_state.lineups_nba)
                 st.session_state.data_source_label = src_label
                 st.session_state.excel_procesado_sig = None
@@ -1478,14 +1590,26 @@ def main() -> None:
             if st.session_state.get("excel_procesado_sig") != excel_signature:
                 try:
                     df_subido = pd.read_excel(io.BytesIO(raw_bytes))
-                    lineups_actualizados = parsear_excel_a_lineups(df_subido, strict_240=False)
+                    lineups_actualizados = parsear_excel_a_lineups(
+                        df_subido,
+                        strict_240=False,
+                        aplicar_lesiones=True,
+                    )
+                    bajas_subidas = extraer_bajas_detectadas_de_lineups(lineups_actualizados)
+                    total_bajas_sub = sum(len(v) for v in bajas_subidas.values())
 
                     st.session_state.lineups_nba = lineups_actualizados
+                    st.session_state.bajas_detectadas_nba = bajas_subidas
+                    st.session_state.roster_source_label = (
+                        f"{archivo_subido.name} + ESPN Injuries ({total_bajas_sub} bajas desc.)"
+                    )
                     st.session_state.df_nba = sincronizar_df_nba_con_lineups(
                         st.session_state.df_nba, lineups_actualizados
                     )
                     st.session_state.df_excel_preview = df_subido.head(12).copy()
-                    st.session_state.data_source_label = f"Excel Activo ({archivo_subido.name})"
+                    st.session_state.data_source_label = (
+                        f"Excel Activo ({archivo_subido.name} • {total_bajas_sub} bajas ESPN desc.)"
+                    )
                     st.session_state.excel_procesado_sig = excel_signature
                     st.session_state.excel_cargado_ok = True
                     st.session_state.lineup_editor_version += 1
@@ -1541,6 +1665,27 @@ def main() -> None:
                 else:
                     st.info("Sin juegos programados en ESPN para esa fecha. Operando con selector manual y consenso decimal.")
 
+        if st.button("🚑 Sincronizar Lesiones ESPN (Out / Doubtful)", use_container_width=True):
+            with st.spinner("Consultando ESPN NBA Injury Report y reasignando minutos a 240.0m (tope 42.0m/jug)..."):
+                rep_fresco = obtener_reporte_lesiones_nba(force_refresh=True)
+                lineups_adj, bajas_adj = aplicar_lesiones_a_lineups(
+                    st.session_state.lineups_nba,
+                    reporte_lesiones=rep_fresco,
+                )
+                st.session_state.lineups_nba = lineups_adj
+                st.session_state.bajas_detectadas_nba = bajas_adj
+                st.session_state.df_nba = sincronizar_df_nba_con_lineups(
+                    st.session_state.df_nba, lineups_adj
+                )
+                st.session_state.lineup_editor_version += 1
+                st.session_state.roster_editor_version += 1
+                total_desc = sum(len(v) for v in bajas_adj.values())
+                meta_inj = obtener_metadata_sincronizacion_lesiones()
+                st.success(
+                    f"Reporte ESPN sincronizado ({meta_inj.get('total_jugadores_descartados', 0)} descartados liga | "
+                    f"{total_desc} bajas titulares descontadas a 0.0m y reasignadas a 240.0m)."
+                )
+
         if st.session_state.calendario_nba:
             st.checkbox(
                 "🎛️ Usar Selector Manual de Respaldo",
@@ -1580,7 +1725,9 @@ def main() -> None:
         umbral_ev_pts = st.slider("Umbral Mínimo de Valor (+EV Pts)", min_value=1.0, max_value=6.0, value=3.0, step=0.5)
         base_seed = st.number_input("Semilla Cuantitativa (RNG Seed)", min_value=1, max_value=999999, value=2026, step=1)
 
+        bajas_totales_rotacion = sum(len(v) for v in st.session_state.get("bajas_detectadas_nba", {}).values())
         st.caption(f"🗓️ Partidos ESPN ({st.session_state.fecha_nba_str}): {len(st.session_state.calendario_nba)}")
+        st.caption(f"🚨 Bajas Rotación Descontadas (ESPN): {bajas_totales_rotacion} jug. (240.0m exactos)")
         st.caption(f"💹 Líneas Mercado Activas: {len(st.session_state.get('lineas_mercado_nba', {}))}")
         st.caption(f"📂 Fuente Ratings: {st.session_state.get('data_source_label', 'Respaldo Local')}")
 
@@ -1626,6 +1773,7 @@ def main() -> None:
             <div class="tv-telemetry-strip">
                 <div class="telemetry-pill">JORNADA ACTIVA: <strong>{fecha_legible_es.upper()} ({fecha_seleccionada.strftime('%Y-%m-%d')})</strong></div>
                 <div class="telemetry-pill">PARTIDOS EN CARTELERA: <strong>{active_games_count} PARTIDO(S)</strong></div>
+                <div class="telemetry-pill">ROSTERS &amp; BAJAS ESPN: <strong>{st.session_state.get('roster_source_label', 'nba_rosters_plantilla.xlsx + ESPN Injuries')}</strong></div>
                 <div class="telemetry-pill">FUENTE EN MEMORIA: <strong>{st.session_state.get('data_source_label', 'nba_stats_completo.csv')}</strong></div>
             </div>
         </div>
@@ -1839,9 +1987,12 @@ def main() -> None:
                 if st.button("🔄 Reset Quintetos a Base", key="reset_matchup_lineups_btn", use_container_width=True):
                     a_abbr = str(df_teams[df_teams["Team"] == away_name].iloc[0]["Team_Abbr"])
                     h_abbr = str(df_teams[df_teams["Team"] == home_name].iloc[0]["Team_Abbr"])
-                    default_dict = build_default_lineups_dict()
-                    st.session_state.lineups_nba[a_abbr] = default_dict[a_abbr]
-                    st.session_state.lineups_nba[h_abbr] = default_dict[h_abbr]
+                    base_dict, _, _ = cargar_rosters_plantilla_excel(aplicar_lesiones=True)
+                    st.session_state.lineups_nba[a_abbr] = base_dict[a_abbr]
+                    st.session_state.lineups_nba[h_abbr] = base_dict[h_abbr]
+                    st.session_state.bajas_detectadas_nba = extraer_bajas_detectadas_de_lineups(
+                        st.session_state.lineups_nba
+                    )
                     st.session_state.df_nba = sincronizar_df_nba_con_lineups(
                         st.session_state.df_nba, st.session_state.lineups_nba
                     )
