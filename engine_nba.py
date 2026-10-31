@@ -20,6 +20,12 @@ MAX_PLAYER_PROJECTED_MINUTES = 42.0
 TEAM_TOTAL_GAME_MINUTES = 240.0
 DEFAULT_ROSTERS_EXCEL_FILENAME = "nba_rosters_plantilla.xlsx"
 
+# Parámetros de Regresión Bayesiana a la Media (Small Sample Size Stabilization)
+BAYESIAN_STABILIZATION_GAMES = 25
+DEFAULT_EARLY_SEASON_GP = 5
+LEAGUE_STARTER_O_EPM_OFFSET = 4.30
+LEAGUE_STARTER_D_EPM_OFFSET = 0.32
+
 LEAGUE_AVG_ORTG = 115.5
 LEAGUE_AVG_PACE = 99.0
 LEAGUE_AVG_ISO_PPP = 1.03
@@ -204,6 +210,42 @@ DEFAULT_LINEUPS_30_TEAMS: Dict[str, List[Dict]] = {
 QUINTETOS_BASE = DEFAULT_LINEUPS_30_TEAMS
 DEFAULT_TEAM_META_BY_ABBR: Dict[str, Dict] = {d["Team_Abbr"]: d for d in DEFAULT_CSV_DATA}
 
+# Tabla Base de Net Rating Proyectado Pretemporada (30 Franquicias NBA)
+# Garantiza que equipos malos o en reconstrucción (WAS, BKN, UTA, POR, CHA, DET, TOR, CHI)
+# arranquen con ratings negativos reales (-5.0 a -8.0 pts/100 poss) antes de la estabilización (N=25).
+PRESEASON_BASE_RATINGS_30_TEAMS: Dict[str, Dict[str, float]] = {
+    "WAS": {"Off_Rtg_Base": 110.5, "Def_Rtg_Base": 118.5, "Net_Rtg_Base": -8.0},
+    "BKN": {"Off_Rtg_Base": 110.8, "Def_Rtg_Base": 118.3, "Net_Rtg_Base": -7.5},
+    "UTA": {"Off_Rtg_Base": 111.4, "Def_Rtg_Base": 118.6, "Net_Rtg_Base": -7.2},
+    "POR": {"Off_Rtg_Base": 111.0, "Def_Rtg_Base": 117.8, "Net_Rtg_Base": -6.8},
+    "CHA": {"Off_Rtg_Base": 111.5, "Def_Rtg_Base": 117.9, "Net_Rtg_Base": -6.4},
+    "DET": {"Off_Rtg_Base": 111.7, "Def_Rtg_Base": 117.5, "Net_Rtg_Base": -5.8},
+    "CHI": {"Off_Rtg_Base": 111.8, "Def_Rtg_Base": 117.5, "Net_Rtg_Base": -5.7},
+    "TOR": {"Off_Rtg_Base": 112.1, "Def_Rtg_Base": 117.6, "Net_Rtg_Base": -5.5},
+    "NOP": {"Off_Rtg_Base": 113.2, "Def_Rtg_Base": 116.0, "Net_Rtg_Base": -2.8},
+    "SAS": {"Off_Rtg_Base": 113.4, "Def_Rtg_Base": 115.0, "Net_Rtg_Base": -1.6},
+    "ATL": {"Off_Rtg_Base": 115.8, "Def_Rtg_Base": 117.0, "Net_Rtg_Base": -1.2},
+    "SAC": {"Off_Rtg_Base": 116.4, "Def_Rtg_Base": 115.6, "Net_Rtg_Base": 0.8},
+    "LAC": {"Off_Rtg_Base": 115.4, "Def_Rtg_Base": 114.0, "Net_Rtg_Base": 1.4},
+    "MIA": {"Off_Rtg_Base": 114.1, "Def_Rtg_Base": 112.0, "Net_Rtg_Base": 2.1},
+    "LAL": {"Off_Rtg_Base": 116.4, "Def_Rtg_Base": 114.2, "Net_Rtg_Base": 2.2},
+    "MEM": {"Off_Rtg_Base": 116.0, "Def_Rtg_Base": 113.4, "Net_Rtg_Base": 2.6},
+    "IND": {"Off_Rtg_Base": 119.2, "Def_Rtg_Base": 116.4, "Net_Rtg_Base": 2.8},
+    "ORL": {"Off_Rtg_Base": 113.5, "Def_Rtg_Base": 110.5, "Net_Rtg_Base": 3.0},
+    "MIL": {"Off_Rtg_Base": 117.6, "Def_Rtg_Base": 114.5, "Net_Rtg_Base": 3.1},
+    "GSW": {"Off_Rtg_Base": 117.1, "Def_Rtg_Base": 113.8, "Net_Rtg_Base": 3.3},
+    "PHX": {"Off_Rtg_Base": 117.9, "Def_Rtg_Base": 114.4, "Net_Rtg_Base": 3.5},
+    "PHI": {"Off_Rtg_Base": 116.8, "Def_Rtg_Base": 113.2, "Net_Rtg_Base": 3.6},
+    "DAL": {"Off_Rtg_Base": 118.2, "Def_Rtg_Base": 114.4, "Net_Rtg_Base": 3.8},
+    "HOU": {"Off_Rtg_Base": 115.4, "Def_Rtg_Base": 111.2, "Net_Rtg_Base": 4.2},
+    "MIN": {"Off_Rtg_Base": 116.0, "Def_Rtg_Base": 110.2, "Net_Rtg_Base": 5.8},
+    "NYK": {"Off_Rtg_Base": 118.5, "Def_Rtg_Base": 112.4, "Net_Rtg_Base": 6.1},
+    "DEN": {"Off_Rtg_Base": 119.4, "Def_Rtg_Base": 112.3, "Net_Rtg_Base": 7.1},
+    "CLE": {"Off_Rtg_Base": 120.2, "Def_Rtg_Base": 112.0, "Net_Rtg_Base": 8.2},
+    "BOS": {"Off_Rtg_Base": 121.2, "Def_Rtg_Base": 112.0, "Net_Rtg_Base": 9.2},
+    "OKC": {"Off_Rtg_Base": 120.0, "Def_Rtg_Base": 110.2, "Net_Rtg_Base": 9.8},
+}
+
 
 def _normal_cdf(x: float) -> float:
     """Función de distribución acumulada normal estándar Φ(x) exacta vía math.erf."""
@@ -310,7 +352,10 @@ def build_default_lineups_dict() -> Dict[str, pd.DataFrame]:
             d_epm = float(r["D_EPM"])
             ppg_b, rpg_b, apg_b = _derivar_metricas_base_jugador(p_name, pos_str, mins_esp, o_epm, d_epm, abbr)
             row_copy = dict(r)
+            row_copy["Team_Abbr"] = abbr
             row_copy["Minutos_Base"] = round(mins_esp, 1)
+            row_copy["O_EPM_Base"] = round(o_epm, 2)
+            row_copy["D_EPM_Base"] = round(d_epm, 2)
             row_copy["Pace_Diff"] = 0.0
             row_copy["PPG_Base"] = ppg_b
             row_copy["RPG_Base"] = rpg_b
@@ -346,6 +391,9 @@ def obtener_lineup_en_sesion(team_abbr: str, fallback_lineups: Optional[Dict[str
 
     if df_res is None:
         df_res = build_default_lineups_dict()[abbr].copy()
+
+    if "Team_Abbr" not in df_res.columns:
+        df_res["Team_Abbr"] = abbr
 
     if not {"Minutos_Base", "PPG_Base", "RPG_Base", "APG_Base"}.issubset(df_res.columns):
         default_lu = {
@@ -1444,12 +1492,15 @@ def parsear_excel_a_lineups(
 
             team_rows.append(
                 {
+                    "Team_Abbr": team_abbr,
                     "Posición": internal_pos,
                     "Jugador": p_name,
                     "Minutos_Esperados": mins_val,
                     "Minutos_Base": mins_base_val,
                     "O_EPM": o_epm_val,
                     "D_EPM": d_epm_val,
+                    "O_EPM_Base": o_epm_val,
+                    "D_EPM_Base": d_epm_val,
                     "Pace_Diff": round(float(row["Pace_Diff"]), 2),
                     "Es_Estrella": bool(row["Es_Estrella"]),
                     "PPG_Base": ppg_base_val,
@@ -1605,7 +1656,13 @@ def construir_excel_plantilla_bytes(
 
         # Hoja 2: Ratings_Equipos_Calibrados
         team_export_cols = [
-            c for c in ["Team_Abbr", "Team", "Conference", "Division", "Pace", "Off_Rtg", "Def_Rtg", "Star1_Name", "Star1_PPG", "Star2_Name", "Star2_PPG"]
+            c for c in [
+                "Team_Abbr", "Team", "Conference", "Division",
+                "GP", "Pace", "Off_Rtg", "Def_Rtg", "Net_Rtg",
+                "Rating_Base", "Net_Rating_2026", "Rating_Final",
+                "Peso_Previo_Bayes", "Peso_Actual_Bayes",
+                "Star1_Name", "Star1_PPG", "Star2_Name", "Star2_PPG",
+            ]
             if c in df_teams.columns
         ]
         df_teams[team_export_cols].to_excel(writer, index=False, sheet_name="Ratings_Equipos_Calibrados")
@@ -1634,14 +1691,28 @@ def construir_excel_plantilla_bytes(
 
 
 # ==============================================================================
-# MOTOR DE CÁLCULO ASCENDENTE (BOTTOM-UP LINEUP AGGREGATOR)
+# MOTOR DE CÁLCULO ASCENDENTE + ESTABILIZACIÓN BAYESIANA (SMALL SAMPLE SIZE N=25)
 # ==============================================================================
-def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[float, float, float]:
+def calcular_rating_base_equipo(
+    df_lineup: pd.DataFrame,
+    team_abbr: str = "",
+    pace_base: float = LEAGUE_AVG_PACE,
+) -> Dict[str, float]:
     """
-    Proyecta el Off_Rtg, Def_Rtg y Pace sumando los minutos ponderados y el impacto
-    neto individual (O_EPM y D_EPM) de los 5 titulares más la unidad de banca (240 minutos totales).
+    Calcula el Rating Base (`Rating_Base`, `Off_Rtg_Base`, `Def_Rtg_Base`, `Pace_Proj`)
+    directamente de la suma ponderada de los minutos en `nba_rosters_plantilla.xlsx`
+    (`Minutos_Esperados` / `Minutos` sobre 240.0 min) y la tabla base proyectada pretemporada
+    (`PRESEASON_BASE_RATINGS_30_TEAMS`), garantizando que:
+      1. Los equipos malos o en reconstrucción (WAS, BKN, UTA, POR, CHA, DET, TOR, CHI)
+         arranquen con ratings negativos reales (-5.0 a -8.0 pts/100 poss).
+      2. Cualquier baja automática de ESPN o edición de minutos/EPM en `nba_rosters_plantilla.xlsx`
+         impacte proporcionalmente el Rating Base del equipo.
     """
     df_clean = df_lineup.copy()
+    abbr_clean = str(team_abbr or "").strip().upper()
+    if not abbr_clean and "Team_Abbr" in df_clean.columns and not df_clean.empty:
+        abbr_clean = str(df_clean["Team_Abbr"].iloc[0]).strip().upper()
+
     mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_clean.columns else "Minutos"
     pos_col = "Posición" if "Posición" in df_clean.columns else "Pos"
 
@@ -1671,12 +1742,54 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
     court_slots = eff_mins / 48.0
     replacement_slots = missing_mins / 48.0
 
-    synergy_scale = 0.62
-    team_off_delta = float((np.sum(court_slots * o_epm) + replacement_slots * (-2.2)) * synergy_scale)
-    team_def_delta = float((np.sum(court_slots * d_epm) + replacement_slots * (-1.2)) * synergy_scale)
+    weighted_o_epm = float(np.sum(court_slots * o_epm) + replacement_slots * (-2.2))
+    weighted_d_epm = float(np.sum(court_slots * d_epm) + replacement_slots * (-1.2))
+    weighted_net_epm = weighted_o_epm + weighted_d_epm
 
-    proj_off_rtg = float(np.clip(LEAGUE_AVG_ORTG + team_off_delta, 98.0, 132.0))
-    proj_def_rtg = float(np.clip(LEAGUE_AVG_ORTG - team_def_delta, 98.0, 132.0))
+    synergy_scale = 0.62
+    preseason_anchor = PRESEASON_BASE_RATINGS_30_TEAMS.get(abbr_clean)
+
+    if preseason_anchor is not None:
+        if "Minutos_Base" in df_clean.columns:
+            base_mins_arr = pd.to_numeric(df_clean["Minutos_Base"], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
+            base_sum = float(np.sum(base_mins_arr))
+            if base_sum > 0.0:
+                base_mins_eff = base_mins_arr * (240.0 / base_sum) if abs(base_sum - 240.0) > 0.05 else base_mins_arr
+            else:
+                base_mins_eff = eff_mins.copy()
+            o_epm_base_arr = (
+                pd.to_numeric(df_clean["O_EPM_Base"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+                if "O_EPM_Base" in df_clean.columns
+                else o_epm
+            )
+            d_epm_base_arr = (
+                pd.to_numeric(df_clean["D_EPM_Base"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+                if "D_EPM_Base" in df_clean.columns
+                else d_epm
+            )
+            def_o_epm_sum = float(np.sum((base_mins_eff / 48.0) * o_epm_base_arr))
+            def_d_epm_sum = float(np.sum((base_mins_eff / 48.0) * d_epm_base_arr))
+        elif abbr_clean in DEFAULT_LINEUPS_30_TEAMS:
+            def_rows = DEFAULT_LINEUPS_30_TEAMS[abbr_clean]
+            def_o_epm_sum = sum((float(r["Minutos_Esperados"]) / 48.0) * float(r["O_EPM"]) for r in def_rows)
+            def_d_epm_sum = sum((float(r["Minutos_Esperados"]) / 48.0) * float(r["D_EPM"]) for r in def_rows)
+        else:
+            def_o_epm_sum = weighted_o_epm
+            def_d_epm_sum = weighted_d_epm
+
+        delta_off_lineup = (weighted_o_epm - def_o_epm_sum) * synergy_scale
+        delta_def_lineup = (weighted_d_epm - def_d_epm_sum) * synergy_scale
+
+        off_rtg_base = float(np.clip(float(preseason_anchor["Off_Rtg_Base"]) + delta_off_lineup, 98.0, 132.0))
+        def_rtg_base = float(np.clip(float(preseason_anchor["Def_Rtg_Base"]) - delta_def_lineup, 98.0, 132.0))
+    else:
+        # Si no se especifica franquicia conocida, centrar respecto al promedio titular NBA (+4.30 O_EPM, +0.32 D_EPM)
+        centered_off_delta = (weighted_o_epm - LEAGUE_STARTER_O_EPM_OFFSET) * 0.85
+        centered_def_delta = (weighted_d_epm - LEAGUE_STARTER_D_EPM_OFFSET) * 0.85
+        off_rtg_base = float(np.clip(LEAGUE_AVG_ORTG + centered_off_delta, 98.0, 132.0))
+        def_rtg_base = float(np.clip(LEAGUE_AVG_ORTG - centered_def_delta, 98.0, 132.0))
+
+    rating_base = off_rtg_base - def_rtg_base
 
     guard_mask = np.isin(pos_arr, ["PG", "SG"])
     big_mask = np.isin(pos_arr, ["PF", "C"])
@@ -1687,15 +1800,157 @@ def calcular_ratings_lineup(df_lineup: pd.DataFrame, pace_base: float) -> Tuple[
     pace_guard_boost = ((guard_mins - 65.0) / 12.0) * 0.45
     pace_style_boost = (guard_o_epm * 0.16) - (big_d_epm * 0.10)
     custom_pace_diff = float(np.sum((eff_mins / 48.0) * pace_diff_arr))
-    proj_pace = float(np.clip(float(pace_base) + pace_guard_boost + pace_style_boost + custom_pace_diff, 88.0, 108.0))
+    proj_pace = float(
+        np.clip(float(pace_base) + pace_guard_boost + pace_style_boost + custom_pace_diff, 88.0, 108.0)
+    )
 
-    return round(proj_off_rtg, 1), round(proj_def_rtg, 1), round(proj_pace, 1)
+    return {
+        "off_rtg_base": round(off_rtg_base, 2),
+        "def_rtg_base": round(def_rtg_base, 2),
+        "rating_base": round(rating_base, 2),
+        "pace_proj": round(proj_pace, 1),
+        "weighted_o_epm": round(weighted_o_epm, 2),
+        "weighted_d_epm": round(weighted_d_epm, 2),
+        "weighted_net_epm": round(weighted_net_epm, 2),
+    }
+
+
+def calcular_regresion_bayesiana_rating(
+    rating_base: float,
+    net_rating_2026: float,
+    juegos_jugados: float = DEFAULT_EARLY_SEASON_GP,
+    umbral_estabilizacion: int = BAYESIAN_STABILIZATION_GAMES,
+    off_rtg_base: Optional[float] = None,
+    def_rtg_base: Optional[float] = None,
+    off_rtg_2026: Optional[float] = None,
+    def_rtg_2026: Optional[float] = None,
+) -> Dict[str, float]:
+    """
+    Sistema de Regresión Bayesiana a la Media (Small Sample Size Stabilization):
+      - Umbral de estabilización: N = 25 partidos (`BAYESIAN_STABILIZATION_GAMES = 25`).
+      - Si `juegos_jugados < 25`:
+          * `peso_actual = (juegos_jugados / 25)`
+          * `peso_previo = 1.0 - peso_actual`
+          * `rating_final = (peso_previo * rating_base) + (peso_actual * net_rating_2026)`
+      - Si `juegos_jugados >= 25`:
+          * `peso_actual = 1.0`
+          * `peso_previo = 0.0`
+          * `rating_final = net_rating_2026`
+    """
+    n_umbral = float(max(1, int(umbral_estabilizacion)))
+    gp_val = max(0.0, float(juegos_jugados))
+    r_base = float(rating_base)
+    r_2026 = float(net_rating_2026)
+
+    if gp_val < n_umbral:
+        peso_actual = gp_val / n_umbral
+        peso_previo = 1.0 - peso_actual
+        rating_final = (peso_previo * r_base) + (peso_actual * r_2026)
+    else:
+        peso_actual = 1.0
+        peso_previo = 0.0
+        rating_final = r_2026
+
+    if off_rtg_base is None or def_rtg_base is None:
+        o_base = LEAGUE_AVG_ORTG + (r_base / 2.0)
+        d_base = LEAGUE_AVG_ORTG - (r_base / 2.0)
+    else:
+        o_base = float(off_rtg_base)
+        d_base = float(def_rtg_base)
+
+    if off_rtg_2026 is None or def_rtg_2026 is None:
+        o_2026 = LEAGUE_AVG_ORTG + (r_2026 / 2.0)
+        d_2026 = LEAGUE_AVG_ORTG - (r_2026 / 2.0)
+    else:
+        o_2026 = float(off_rtg_2026)
+        d_2026 = float(def_rtg_2026)
+
+    off_final_raw = (peso_previo * o_base) + (peso_actual * o_2026)
+    def_final_raw = (peso_previo * d_base) + (peso_actual * d_2026)
+
+    off_final = round(float(np.clip(off_final_raw, 98.0, 132.0)), 1)
+    rating_final_rounded = round(float(rating_final), 1)
+    def_final = round(float(np.clip(off_final - rating_final_rounded, 98.0, 132.0)), 1)
+
+    return {
+        "juegos_jugados": round(gp_val, 1),
+        "umbral_estabilizacion": int(n_umbral),
+        "peso_actual": round(peso_actual, 4),
+        "peso_previo": round(peso_previo, 4),
+        "rating_base": round(r_base, 2),
+        "net_rating_2026": round(r_2026, 2),
+        "rating_final": round(rating_final, 2),
+        "rating_final_1d": rating_final_rounded,
+        "off_rtg_base": round(o_base, 1),
+        "def_rtg_base": round(d_base, 1),
+        "off_rtg_2026": round(o_2026, 1),
+        "def_rtg_2026": round(d_2026, 1),
+        "off_rtg_final": off_final,
+        "def_rtg_final": def_final,
+    }
+
+
+def calcular_ratings_lineup(
+    df_lineup: pd.DataFrame,
+    pace_base: float,
+    team_abbr: str = "",
+    juegos_jugados: Optional[float] = None,
+    off_rtg_2026: Optional[float] = None,
+    def_rtg_2026: Optional[float] = None,
+) -> Tuple[float, float, float]:
+    """
+    Proyecta el Off_Rtg, Def_Rtg y Pace integrando:
+      1) El Rating Base ponderado por minutos en `nba_rosters_plantilla.xlsx` (`calcular_rating_base_equipo`).
+      2) La Regresión Bayesiana a la Media con umbral N = 25 partidos (`calcular_regresion_bayesiana_rating`)
+         cuando se proveen los ratings observados de la temporada 2026 (`off_rtg_2026`, `def_rtg_2026`)
+         o los juegos disputados (`juegos_jugados`).
+    """
+    base_info = calcular_rating_base_equipo(
+        df_lineup=df_lineup,
+        team_abbr=team_abbr,
+        pace_base=pace_base,
+    )
+    o_base = float(base_info["off_rtg_base"])
+    d_base = float(base_info["def_rtg_base"])
+    r_base = float(base_info["rating_base"])
+    proj_pace = float(base_info["pace_proj"])
+
+    if off_rtg_2026 is not None and def_rtg_2026 is not None:
+        gp_eff = float(DEFAULT_EARLY_SEASON_GP if juegos_jugados is None else juegos_jugados)
+        net_2026 = float(off_rtg_2026) - float(def_rtg_2026)
+        bayes = calcular_regresion_bayesiana_rating(
+            rating_base=r_base,
+            net_rating_2026=net_2026,
+            juegos_jugados=gp_eff,
+            umbral_estabilizacion=BAYESIAN_STABILIZATION_GAMES,
+            off_rtg_base=o_base,
+            def_rtg_base=d_base,
+            off_rtg_2026=float(off_rtg_2026),
+            def_rtg_2026=float(def_rtg_2026),
+        )
+        return float(bayes["off_rtg_final"]), float(bayes["def_rtg_final"]), round(proj_pace, 1)
+
+    return round(o_base, 1), round(d_base, 1), round(proj_pace, 1)
+
+
+def _extraer_juegos_jugados_fila(team_row: pd.Series) -> float:
+    """Extrae el número de partidos disputados (GP / Juegos_Jugados) desde la fila del equipo (default = 5)."""
+    for col_gp in ("Juegos_Jugados", "GP", "Games_Played", "Partidos_Jugados"):
+        if col_gp in team_row and pd.notna(team_row[col_gp]):
+            try:
+                val = float(team_row[col_gp])
+                if val >= 0.0:
+                    return val
+            except (TypeError, ValueError):
+                continue
+    return float(DEFAULT_EARLY_SEASON_GP)
 
 
 def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
     """
-    Actualiza dinámicamente Off_Rtg, Def_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
-    de la fila del equipo a partir de su quinteto en sesión.
+    Actualiza dinámicamente Off_Rtg, Def_Rtg, Net_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
+    de la fila del equipo a partir de su quinteto en sesión y aplica el sistema de
+    Regresión Bayesiana a la Media (umbral N = 25 partidos).
     """
     updated = team_row.copy()
     t_abbr = str(team_row["Team_Abbr"]).strip().upper()
@@ -1705,18 +1960,98 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     }
 
     pace_base = float(team_row.get("Base_Pace", default_meta.get("Pace", team_row["Pace"])))
-    base_off = float(team_row.get("Base_Off_Rtg", default_meta.get("Off_Rtg", team_row["Off_Rtg"])))
-    base_def = float(team_row.get("Base_Def_Rtg", default_meta.get("Def_Rtg", team_row["Def_Rtg"])))
 
-    off_rtg, def_rtg, dyn_pace = calcular_ratings_lineup(df_lineup, pace_base)
+    # Determinar el Rating Observado 2026 de manera idempotente pero sensible a ediciones manuales/Kalman
+    cur_off = float(team_row.get("Off_Rtg", default_meta.get("Off_Rtg", LEAGUE_AVG_ORTG)))
+    cur_def = float(team_row.get("Def_Rtg", default_meta.get("Def_Rtg", LEAGUE_AVG_ORTG)))
+    last_stab_off = team_row.get("_Last_Stabilized_Off_Rtg")
+    last_stab_def = team_row.get("_Last_Stabilized_Def_Rtg")
 
-    updated["Base_Off_Rtg"] = base_off
-    updated["Base_Def_Rtg"] = base_def
-    updated["Base_Pace"] = pace_base
+    if (
+        "Obs_Off_Rtg_2026" in team_row
+        and pd.notna(team_row["Obs_Off_Rtg_2026"])
+        and last_stab_off is not None
+        and abs(cur_off - float(last_stab_off)) <= 0.05
+    ):
+        obs_off_2026 = float(team_row["Obs_Off_Rtg_2026"])
+    else:
+        obs_off_2026 = cur_off
+
+    if (
+        "Obs_Def_Rtg_2026" in team_row
+        and pd.notna(team_row["Obs_Def_Rtg_2026"])
+        and last_stab_def is not None
+        and abs(cur_def - float(last_stab_def)) <= 0.05
+    ):
+        obs_def_2026 = float(team_row["Obs_Def_Rtg_2026"])
+    else:
+        obs_def_2026 = cur_def
+
+    net_2026_obs = obs_off_2026 - obs_def_2026
+    if "Net_Rating_2026" in team_row and pd.notna(team_row["Net_Rating_2026"]):
+        explicit_net_2026 = float(team_row["Net_Rating_2026"])
+        last_net_2026 = team_row.get("_Last_Net_Rating_2026")
+        if last_net_2026 is None or abs(explicit_net_2026 - float(last_net_2026)) > 0.05:
+            diff_net = explicit_net_2026 - net_2026_obs
+            obs_off_2026 += diff_net / 2.0
+            obs_def_2026 -= diff_net / 2.0
+            net_2026_obs = explicit_net_2026
+
+    juegos_jugados = _extraer_juegos_jugados_fila(team_row)
+
+    # 1) Calcular Rating Base desde la suma ponderada de minutos en nba_rosters_plantilla.xlsx + tabla base pretemporada
+    base_info = calcular_rating_base_equipo(
+        df_lineup=df_lineup,
+        team_abbr=t_abbr,
+        pace_base=pace_base,
+    )
+    off_rtg_base = float(base_info["off_rtg_base"])
+    def_rtg_base = float(base_info["def_rtg_base"])
+    rating_base = float(base_info["rating_base"])
+    dyn_pace = float(base_info["pace_proj"])
+
+    # 2) Aplicar Regresión Bayesiana a la Media (N = 25 partidos)
+    bayes_res = calcular_regresion_bayesiana_rating(
+        rating_base=rating_base,
+        net_rating_2026=net_2026_obs,
+        juegos_jugados=juegos_jugados,
+        umbral_estabilizacion=BAYESIAN_STABILIZATION_GAMES,
+        off_rtg_base=off_rtg_base,
+        def_rtg_base=def_rtg_base,
+        off_rtg_2026=obs_off_2026,
+        def_rtg_2026=obs_def_2026,
+    )
+
+    off_rtg = float(bayes_res["off_rtg_final"])
+    def_rtg = float(bayes_res["def_rtg_final"])
+    rating_final = round(float(bayes_res["rating_final"]), 2)
+
+    # Base_Off_Rtg / Base_Def_Rtg representan el ancla base pretemporada saludable para referencia de mercado
+    preseason_meta = PRESEASON_BASE_RATINGS_30_TEAMS.get(t_abbr, {})
+    base_off = float(team_row.get("Base_Off_Rtg", preseason_meta.get("Off_Rtg_Base", off_rtg_base)))
+    base_def = float(team_row.get("Base_Def_Rtg", preseason_meta.get("Def_Rtg_Base", def_rtg_base)))
+
+    updated["Base_Off_Rtg"] = round(base_off, 1)
+    updated["Base_Def_Rtg"] = round(base_def, 1)
+    updated["Base_Pace"] = round(pace_base, 1)
+
+    updated["Obs_Off_Rtg_2026"] = round(obs_off_2026, 1)
+    updated["Obs_Def_Rtg_2026"] = round(obs_def_2026, 1)
+    updated["GP"] = int(round(juegos_jugados))
+    updated["Juegos_Jugados"] = round(juegos_jugados, 1)
+    updated["Peso_Actual_Bayes"] = float(bayes_res["peso_actual"])
+    updated["Peso_Previo_Bayes"] = float(bayes_res["peso_previo"])
+    updated["Rating_Base"] = round(rating_base, 2)
+    updated["Net_Rating_2026"] = round(net_2026_obs, 2)
+    updated["Rating_Final"] = rating_final
+    updated["Net_Rtg"] = round(off_rtg - def_rtg, 1)
 
     updated["Off_Rtg"] = off_rtg
     updated["Def_Rtg"] = def_rtg
     updated["Pace"] = dyn_pace
+    updated["_Last_Stabilized_Off_Rtg"] = off_rtg
+    updated["_Last_Stabilized_Def_Rtg"] = def_rtg
+    updated["_Last_Net_Rating_2026"] = round(net_2026_obs, 2)
 
     pos_col = "Posición" if "Posición" in df_lineup.columns else "Pos"
     mins_col = "Minutos_Esperados" if "Minutos_Esperados" in df_lineup.columns else "Minutos"
@@ -1832,7 +2167,8 @@ def sincronizar_df_nba_con_lineups(
 ) -> pd.DataFrame:
     """
     Sincroniza inmediatamente `df_nba` (usado en el Gestor de Rosters y cabeceras)
-    con los quintetos cargados en `st.session_state.lineups_nba`.
+    con los quintetos cargados en `st.session_state.lineups_nba` y las métricas de
+    estabilización bayesiana (N = 25 partidos).
     """
     df_sync = df_nba.copy()
     for idx, row in df_sync.iterrows():
@@ -1840,8 +2176,13 @@ def sincronizar_df_nba_con_lineups(
         lu_df = obtener_lineup_en_sesion(abbr, fallback_lineups=lineups_dict)
         updated_row = apply_lineup_to_team_row(row, lu_df)
         for col in [
-            "Pace", "Off_Rtg", "Def_Rtg",
+            "Pace", "Off_Rtg", "Def_Rtg", "Net_Rtg",
             "Base_Pace", "Base_Off_Rtg", "Base_Def_Rtg",
+            "Obs_Off_Rtg_2026", "Obs_Def_Rtg_2026",
+            "GP", "Juegos_Jugados",
+            "Peso_Actual_Bayes", "Peso_Previo_Bayes",
+            "Rating_Base", "Net_Rating_2026", "Rating_Final",
+            "_Last_Stabilized_Off_Rtg", "_Last_Stabilized_Def_Rtg", "_Last_Net_Rating_2026",
             "Star1_Name", "Star1_PPG", "Star1_Line",
             "Star1_PPG_Base", "Star1_RPG_Base", "Star1_APG_Base", "Star1_Minutos_Base", "Star1_Minutos_Proy",
             "Star2_Name", "Star2_PPG", "Star2_Line",
