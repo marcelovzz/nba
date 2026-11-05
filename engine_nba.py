@@ -1,4 +1,6 @@
+from datetime import date, datetime
 import io
+import json
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,6 +21,9 @@ from sync_injuries_nba import (
 MAX_PLAYER_PROJECTED_MINUTES = 42.0
 TEAM_TOTAL_GAME_MINUTES = 240.0
 DEFAULT_ROSTERS_EXCEL_FILENAME = "nba_rosters_plantilla.xlsx"
+TEAM_RATINGS_STATE_FILENAME = "data/team_ratings_state.json"
+PREDICTION_HISTORY_CSV_FILENAME = "data/prediction_history.csv"
+ELO_BAYES_K = 0.06
 
 # Parámetros de Regresión Bayesiana a la Media (Small Sample Size Stabilization)
 BAYESIAN_STABILIZATION_GAMES = 25
@@ -1659,7 +1664,7 @@ def construir_excel_plantilla_bytes(
             c for c in [
                 "Team_Abbr", "Team", "Conference", "Division",
                 "GP", "Pace", "Off_Rtg", "Def_Rtg", "Net_Rtg",
-                "Rating_Base", "Net_Rating_2026", "Rating_Final",
+                "Rating_Base", "Net_Rating_2026", "Rating_Final", "Live_Calibrated_Rating",
                 "Peso_Previo_Bayes", "Peso_Actual_Bayes",
                 "Star1_Name", "Star1_PPG", "Star2_Name", "Star2_PPG",
             ]
@@ -1946,15 +1951,107 @@ def _extraer_juegos_jugados_fila(team_row: pd.Series) -> float:
     return float(DEFAULT_EARLY_SEASON_GP)
 
 
+def _resolver_ruta_estado_ratings(state_path: Optional[Any] = None) -> Optional[Path]:
+    """Resuelve la ruta hacia `data/team_ratings_state.json` si existe en disco."""
+    if state_path is not None:
+        p = Path(state_path)
+        return p if p.exists() else None
+    candidates = [
+        Path(TEAM_RATINGS_STATE_FILENAME),
+        Path(__file__).resolve().parent / TEAM_RATINGS_STATE_FILENAME,
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def load_live_team_rating(
+    team_name: str,
+    baseline_rating: float,
+    state_path: Optional[Any] = None,
+) -> float:
+    """
+    Verifica si existe `data/team_ratings_state.json`.
+    Si el archivo existe y contiene el rating dinámico ya calibrado para `team_name`
+    (por nombre completo como 'Boston Celtics' o abreviatura como 'BOS'), retorna dicho rating;
+    si no existe, recurre al `baseline_rating` de la plantilla.
+    """
+    base_val = float(baseline_rating)
+    target_path = _resolver_ruta_estado_ratings(state_path=state_path)
+    if target_path is None:
+        return round(base_val, 2)
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return round(base_val, 2)
+
+    if not isinstance(data, dict):
+        return round(base_val, 2)
+
+    teams_pool = data.get("teams", data) if isinstance(data.get("teams"), dict) else data
+    key_clean = str(team_name or "").strip()
+    if not key_clean:
+        return round(base_val, 2)
+
+    abbr_match = ""
+    full_name_match = ""
+    key_upper = key_clean.upper()
+    key_lower = key_clean.lower()
+    for d_row in DEFAULT_CSV_DATA:
+        if d_row["Team_Abbr"].upper() == key_upper or d_row["Team"].lower() == key_lower:
+            abbr_match = d_row["Team_Abbr"].upper()
+            full_name_match = d_row["Team"]
+            break
+
+    search_keys = [key_clean, key_upper]
+    if full_name_match and full_name_match not in search_keys:
+        search_keys.append(full_name_match)
+    if abbr_match and abbr_match not in search_keys:
+        search_keys.append(abbr_match)
+
+    entry: Any = None
+    for k in search_keys:
+        if k in teams_pool:
+            entry = teams_pool[k]
+            break
+
+    if entry is None:
+        lower_map = {str(k).strip().lower(): v for k, v in teams_pool.items()}
+        for k in search_keys:
+            if k.lower() in lower_map:
+                entry = lower_map[k.lower()]
+                break
+
+    if entry is None:
+        return round(base_val, 2)
+
+    if isinstance(entry, (int, float, np.floating, np.integer)):
+        return round(float(entry), 2)
+
+    if isinstance(entry, dict):
+        for field in ("rating", "net_rating", "Net_Rtg", "Rating_Final"):
+            if field in entry and entry[field] is not None:
+                try:
+                    return round(float(entry[field]), 2)
+                except (TypeError, ValueError):
+                    continue
+
+    return round(base_val, 2)
+
+
 def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd.Series:
     """
     Actualiza dinámicamente Off_Rtg, Def_Rtg, Net_Rtg, Pace y los 2 líderes anotadores (Star1 / Star2)
-    de la fila del equipo a partir de su quinteto en sesión y aplica el sistema de
-    Regresión Bayesiana a la Media (umbral N = 25 partidos).
+    de la fila del equipo a partir de su quinteto en sesión, aplica la Regresión Bayesiana a la Media
+    (umbral N = 25 partidos) e integra el rating vivo autocalibrado (`load_live_team_rating`).
     """
     updated = team_row.copy()
     t_abbr = str(team_row["Team_Abbr"]).strip().upper()
     default_meta = DEFAULT_TEAM_META_BY_ABBR.get(t_abbr, {})
+    team_full_name = str(team_row.get("Team", default_meta.get("Team", t_abbr))).strip()
     default_lu = {
         str(r["Jugador"]).lower(): r for r in DEFAULT_LINEUPS_30_TEAMS.get(t_abbr, [])
     }
@@ -2026,8 +2123,21 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     def_rtg = float(bayes_res["def_rtg_final"])
     rating_final = round(float(bayes_res["rating_final"]), 2)
 
-    # Base_Off_Rtg / Base_Def_Rtg representan el ancla base pretemporada saludable para referencia de mercado
+    # 3) Integrar Rating Vivo Autocalibrado desde data/team_ratings_state.json (si existe)
     preseason_meta = PRESEASON_BASE_RATINGS_30_TEAMS.get(t_abbr, {})
+    healthy_preseason_net = float(preseason_meta.get("Net_Rtg_Base", rating_base))
+    injury_lineup_delta = (rating_base - healthy_preseason_net) * float(bayes_res["peso_previo"])
+    healthy_rating_final = round(rating_final - injury_lineup_delta, 2)
+
+    live_calibrated_healthy = load_live_team_rating(team_full_name, healthy_rating_final)
+    live_rating = round(live_calibrated_healthy + injury_lineup_delta, 2)
+    if abs(live_rating - rating_final) > 1e-4:
+        delta_live = live_rating - rating_final
+        off_rtg = round(float(np.clip(off_rtg + (delta_live / 2.0), 98.0, 132.0)), 1)
+        def_rtg = round(float(np.clip(off_rtg - round(live_rating, 1), 98.0, 132.0)), 1)
+        rating_final = round(live_rating, 2)
+
+    # Base_Off_Rtg / Base_Def_Rtg representan el ancla base pretemporada saludable para referencia de mercado
     base_off = float(team_row.get("Base_Off_Rtg", preseason_meta.get("Off_Rtg_Base", off_rtg_base)))
     base_def = float(team_row.get("Base_Def_Rtg", preseason_meta.get("Def_Rtg_Base", def_rtg_base)))
 
@@ -2044,6 +2154,7 @@ def apply_lineup_to_team_row(team_row: pd.Series, df_lineup: pd.DataFrame) -> pd
     updated["Rating_Base"] = round(rating_base, 2)
     updated["Net_Rating_2026"] = round(net_2026_obs, 2)
     updated["Rating_Final"] = rating_final
+    updated["Live_Calibrated_Rating"] = rating_final
     updated["Net_Rtg"] = round(off_rtg - def_rtg, 1)
 
     updated["Off_Rtg"] = off_rtg
@@ -2181,7 +2292,7 @@ def sincronizar_df_nba_con_lineups(
             "Obs_Off_Rtg_2026", "Obs_Def_Rtg_2026",
             "GP", "Juegos_Jugados",
             "Peso_Actual_Bayes", "Peso_Previo_Bayes",
-            "Rating_Base", "Net_Rating_2026", "Rating_Final",
+            "Rating_Base", "Net_Rating_2026", "Rating_Final", "Live_Calibrated_Rating",
             "_Last_Stabilized_Off_Rtg", "_Last_Stabilized_Def_Rtg", "_Last_Net_Rating_2026",
             "Star1_Name", "Star1_PPG", "Star1_Line",
             "Star1_PPG_Base", "Star1_RPG_Base", "Star1_APG_Base", "Star1_Minutos_Base", "Star1_Minutos_Proy",
@@ -2849,6 +2960,149 @@ def extract_executive_radar(sim_results: List[Dict]) -> Dict:
 # ==============================================================================
 # EXPORTACIÓN DE PROYECCIONES CUANTITATIVAS NBA (5,000 SIMULACIONES -> XLSX / CSV)
 # ==============================================================================
+PREDICTION_HISTORY_COLS: List[str] = [
+    "game_id",
+    "date",
+    "home_team",
+    "away_team",
+    "home_abbr",
+    "away_abbr",
+    "projected_home_pts",
+    "projected_away_pts",
+    "projected_margin",
+    "projected_total",
+    "status",
+    "actual_home_score",
+    "actual_away_score",
+    "actual_margin",
+    "actual_total",
+    "margin_error",
+    "total_error",
+    "calibrated_at",
+]
+
+
+def save_daily_predictions_to_history(
+    results_list: List[Dict[str, Any]],
+    slate_meta: Optional[List[Dict[str, Any]]] = None,
+    fecha_str: Optional[str] = None,
+    history_path: Optional[Any] = None,
+) -> pd.DataFrame:
+    """
+    Al generar las proyecciones diarias antes de los partidos, guarda automáticamente
+    las predicciones (`game_id`, `home_team`, `away_team`, `projected_margin`, `projected_total`,
+    `status='pending'`) en `data/prediction_history.csv`.
+    Si una predicción ya fue evaluada (`status == 'evaluated'`), preserva su evaluación intacta.
+    """
+    if fecha_str is None:
+        if st is not None and hasattr(st, "session_state") and "fecha_nba" in st.session_state:
+            try:
+                fecha_str = st.session_state.fecha_nba.strftime("%Y-%m-%d")
+            except Exception:
+                fecha_str = date.today().strftime("%Y-%m-%d")
+        else:
+            fecha_str = date.today().strftime("%Y-%m-%d")
+
+    fecha_clean = str(fecha_str).strip()
+    fecha_compact = fecha_clean.replace("-", "")
+
+    target_csv = (
+        Path(history_path)
+        if history_path is not None
+        else (Path(__file__).resolve().parent / PREDICTION_HISTORY_CSV_FILENAME)
+    )
+    target_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    existing_df = pd.DataFrame(columns=PREDICTION_HISTORY_COLS)
+    if target_csv.exists():
+        try:
+            loaded_df = pd.read_csv(target_csv)
+            if not loaded_df.empty:
+                for col in PREDICTION_HISTORY_COLS:
+                    if col not in loaded_df.columns:
+                        loaded_df[col] = np.nan
+                existing_df = loaded_df[PREDICTION_HISTORY_COLS].copy()
+                for str_col in ("game_id", "date", "home_team", "away_team", "home_abbr", "away_abbr", "status", "calibrated_at"):
+                    existing_df[str_col] = existing_df[str_col].fillna("").astype(object)
+        except Exception:
+            existing_df = pd.DataFrame(columns=PREDICTION_HISTORY_COLS)
+
+    new_records: List[Dict[str, Any]] = []
+    for idx, res in enumerate(results_list or []):
+        away_abbr = str(res.get("away_abbr", "AWAY")).strip().upper()
+        home_abbr = str(res.get("home_abbr", "HOME")).strip().upper()
+        away_team = str(res.get("away_team", away_abbr)).strip()
+        home_team = str(res.get("home_team", home_abbr)).strip()
+
+        meta = slate_meta[idx] if slate_meta and idx < len(slate_meta) and isinstance(slate_meta[idx], dict) else {}
+        raw_id = str(meta.get("id_partido") or res.get("game_id") or "").strip()
+        if not raw_id or raw_id == f"{away_abbr}_{home_abbr}":
+            game_id = f"{fecha_compact}_{away_abbr}_{home_abbr}"
+        else:
+            game_id = raw_id
+
+        exp_away = round(float(res.get("exp_away_pts", 0.0)), 2)
+        exp_home = round(float(res.get("exp_home_pts", 0.0)), 2)
+        proj_margin = round(float(res.get("exp_margin_home", exp_home - exp_away)), 2)
+        proj_total = round(float(res.get("exp_total_pts", exp_home + exp_away)), 2)
+
+        new_records.append(
+            {
+                "game_id": str(game_id),
+                "date": fecha_clean,
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_abbr": home_abbr,
+                "away_abbr": away_abbr,
+                "projected_home_pts": exp_home,
+                "projected_away_pts": exp_away,
+                "projected_margin": proj_margin,
+                "projected_total": proj_total,
+                "status": "pending",
+                "actual_home_score": np.nan,
+                "actual_away_score": np.nan,
+                "actual_margin": np.nan,
+                "actual_total": np.nan,
+                "margin_error": np.nan,
+                "total_error": np.nan,
+                "calibrated_at": "",
+            }
+        )
+
+    if not new_records:
+        return existing_df
+
+    if existing_df.empty:
+        merged_df = pd.DataFrame(new_records)[PREDICTION_HISTORY_COLS]
+    else:
+        merged_df = existing_df.copy()
+        for rec in new_records:
+            gid = str(rec["game_id"])
+            mask_id = merged_df["game_id"].astype(str) == gid
+            mask_matchup = (
+                (merged_df["date"].astype(str) == str(rec["date"]))
+                & (merged_df["home_abbr"].astype(str).str.upper() == str(rec["home_abbr"]).upper())
+                & (merged_df["away_abbr"].astype(str).str.upper() == str(rec["away_abbr"]).upper())
+            )
+            combined_mask = mask_id | mask_matchup
+            if combined_mask.any():
+                idx_match = merged_df[combined_mask].index[0]
+                cur_status = str(merged_df.loc[idx_match, "status"]).strip().lower()
+                if cur_status == "evaluated":
+                    continue
+                for k, v in rec.items():
+                    merged_df.loc[idx_match, k] = v
+            else:
+                merged_df = pd.concat([merged_df, pd.DataFrame([rec])], ignore_index=True)
+
+    try:
+        merged_df.to_csv(target_csv, index=False, encoding="utf-8")
+    except OSError:
+        pass
+
+    return merged_df
+
+
 def build_nba_predictions_export_df(
     results_list: List[Dict[str, Any]],
     slate_meta: Optional[List[Dict[str, Any]]] = None,
@@ -3002,6 +3256,12 @@ def build_nba_predictions_export_df(
                 "Apuesta Sugerida": apuesta_str,
             }
         )
+
+    save_daily_predictions_to_history(
+        results_list=results_list,
+        slate_meta=slate_meta,
+        fecha_str=fecha_str,
+    )
 
     return pd.DataFrame(rows)
 
