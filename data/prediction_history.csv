@@ -13,8 +13,8 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909933,2026-11-04,San Antonio Spurs,Dallas Mavericks,SAS,DAL,115.21,120.14,-4.93,235.35,evaluated,112.0,111.0,1.0,223.0,5.93,-12.35,2026-11-05T17:56:02Z
 401909934,2026-11-04,Sacramento Kings,Los Angeles Lakers,SAC,LAL,119.94,117.95,1.99,237.89,evaluated,103.0,116.0,-13.0,219.0,-14.99,-18.89,2026-11-05T17:56:02Z
 401909935,2026-11-04,LA Clippers,Miami Heat,LAC,MIA,113.86,109.47,4.4,223.33,evaluated,116.0,117.0,-1.0,233.0,-5.4,9.67,2026-11-05T17:56:02Z
-401909936,2026-11-05,Phoenix Suns,Orlando Magic,PHX,ORL,116.43,107.87,8.56,224.3,pending,,,,,,,
-401909937,2026-11-05,Golden State Warriors,Miami Heat,GSW,MIA,116.73,111.32,5.4,228.05,pending,,,,,,,
+401909936,2026-11-05,Phoenix Suns,Orlando Magic,PHX,ORL,116.43,107.87,8.56,224.3,evaluated,117.0,104.0,13.0,221.0,4.44,-3.3,2026-11-06T17:16:48Z
+401909937,2026-11-05,Golden State Warriors,Miami Heat,GSW,MIA,116.73,111.32,5.4,228.05,evaluated,120.0,100.0,20.0,220.0,14.6,-8.05,2026-11-06T17:16:48Z
 401909287,2026-11-06,Atlanta Hawks,Washington Wizards,ATL,WAS,122.53,110.95,11.58,233.48,pending,,,,,,,
 401909288,2026-11-06,Charlotte Hornets,Boston Celtics,CHA,BOS,109.41,121.26,-11.85,230.68,pending,,,,,,,
 401909289,2026-11-06,Cleveland Cavaliers,Philadelphia 76ers,CLE,PHI,121.49,115.09,6.39,236.58,pending,,,,,,,
