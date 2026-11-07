@@ -11,10 +11,13 @@ import requests
 import engine_nba
 from engine_nba import (
     FULL_30_TEAM_SLATE,
+    build_highest_probability_sheet,
     build_nba_predictions_export_df,
     cargar_rosters_plantilla_excel,
+    export_high_probability_excel_bytes,
     export_nba_excel_bytes,
     extract_executive_radar,
+    generate_executive_quant_report,
     obtener_lineup_en_sesion,
     run_monte_carlo_matchup,
     sincronizar_df_nba_con_lineups,
@@ -109,15 +112,58 @@ def construir_html_reporte_nba(
     fecha_obj: date,
     bajas_por_equipo: Dict[str, List[Dict[str, Any]]],
     fuente_rosters: str,
+    high_prob_df: Optional[pd.DataFrame] = None,
+    exec_report: Optional[Any] = None,
 ) -> str:
     """
     Construye el cuerpo HTML oscuro institucional ('TERMINAL SHARP: NBA QUANT') para el reporte diario.
-    Resalta en verde neón (#00ffcc) todas las cuotas y selecciones con +EV >= 4.0%.
+    Incluye antes de la tabla general el bloque '🎯 TOP PICKS: MAYOR CERTEZA CUANTITATIVA (HIGH-CONFIDENCE ANCHORS)'
+    con el memorando analítico profesional y resalta en verde neón (#00ffcc) todas las cuotas con +EV >= 4.0%.
     """
     fecha_larga = html.escape(formatear_fecha_larga_es(fecha_obj))
     fecha_iso = fecha_obj.strftime("%Y-%m-%d")
     radar = extract_executive_radar(sim_results)
     total_bajas = sum(len(v) for v in (bajas_por_equipo or {}).values())
+
+    if high_prob_df is None or high_prob_df.empty:
+        high_prob_df = build_highest_probability_sheet(sim_results, fecha_str=fecha_iso)
+    if exec_report is None:
+        exec_report = generate_executive_quant_report(sim_results, high_prob_df=high_prob_df, top_n=3)
+
+    exec_report_html = (
+        exec_report.html
+        if hasattr(exec_report, "html") and exec_report.html
+        else f'<pre style="white-space:pre-wrap; color:#cbd5e1; font-size:12px;">{html.escape(str(exec_report))}</pre>'
+    )
+
+    filas_high_prob_html: List[str] = []
+    for idx_hp, (_, hp_row) in enumerate(high_prob_df.head(6).iterrows()):
+        rank_hp = int(hp_row.get("Ranking", idx_hp + 1))
+        sel_hp = html.escape(str(hp_row.get("Mercado / Selección", "N/A")))
+        mkt_hp = html.escape(str(hp_row.get("Tipo de Mercado", "N/A")))
+        part_hp = html.escape(str(hp_row.get("Partido", "N/A")))
+        prob_mod_hp = float(hp_row.get("Probabilidad del Modelo (%)", 50.0))
+        prob_novig_hp = float(hp_row.get("Probabilidad Implícita del Mercado sin Vigorish (%)", 50.0))
+        edge_hp = float(hp_row.get("Edge Matemático (%)", 0.0))
+        ev_hp = float(hp_row.get("EV (%)", 0.0))
+        conf_hp = html.escape(str(hp_row.get("Nivel de Confianza / Varianza del Modelo", "Alta")))
+        bg_hp = "#111827" if idx_hp % 2 == 0 else "#0d1117"
+        ev_color_hp = NEON_GREEN_HEX if (ev_hp >= EV_HIGHLIGHT_THRESHOLD or edge_hp >= 2.0) else "#cbd5e1"
+        filas_high_prob_html.append(
+            f"""
+            <tr style="background-color:{bg_hp}; border-bottom:1px solid #1e293b;">
+              <td style="padding:8px 10px; text-align:center; color:{NEON_GREEN_HEX}; font-weight:800; font-family:Consolas,monospace; font-size:12px;">#{rank_hp}</td>
+              <td style="padding:8px 10px; color:#ffffff; font-weight:700; font-size:12px;">
+                <div>{sel_hp} <span style="color:#38bdf8; font-size:11px;">[{mkt_hp}]</span></div>
+                <div style="color:#94a3b8; font-size:10px; font-weight:400;">{part_hp}</div>
+              </td>
+              <td style="padding:8px 10px; text-align:center; color:{NEON_GREEN_HEX}; font-weight:800; font-family:Consolas,monospace; font-size:13px;">{prob_mod_hp:.1f}%</td>
+              <td style="padding:8px 10px; text-align:center; color:#cbd5e1; font-family:Consolas,monospace; font-size:12px;">{prob_novig_hp:.1f}%</td>
+              <td style="padding:8px 10px; text-align:center; color:{ev_color_hp}; font-weight:700; font-family:Consolas,monospace; font-size:12px;">{edge_hp:+.1f}% | {ev_hp:+.1f}% EV</td>
+              <td style="padding:8px 10px; text-align:right; color:#e2e8f0; font-size:11px;">{conf_hp}</td>
+            </tr>
+            """
+        )
 
     # Contabilizar oportunidades con +EV >= 4.0%
     oportunidades_sharp = 0
@@ -277,6 +323,36 @@ def construir_html_reporte_nba(
       </div>
     </div>
 
+    <!-- BLOQUE DESTACADO: TOP PICKS MAYOR CERTEZA CUANTITATIVA (HIGH-CONFIDENCE ANCHORS) -->
+    <div style="margin:20px 28px 6px 28px; padding:20px 22px; background-color:#0d1117; border:1px solid {NEON_GREEN_HEX}; border-radius:10px; box-shadow:0 4px 20px rgba(0, 255, 204, 0.08);">
+      <div style="font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:{NEON_GREEN_HEX}; font-weight:800; margin-bottom:4px;">
+        MEMORANDO EJECUTIVO CUANTITATIVO // ORDENADO ESTRICTAMENTE POR MAYOR PROBABILIDAD DE SUCEDER
+      </div>
+      <h2 style="margin:0 0 14px 0; font-size:16px; color:#ffffff; letter-spacing:0.4px;">
+        🎯 TOP PICKS: MAYOR CERTEZA CUANTITATIVA (HIGH-CONFIDENCE ANCHORS)
+      </h2>
+
+      <table style="width:100%; border-collapse:collapse; margin-bottom:16px; background-color:#0b0f19; border:1px solid #1e293b;">
+        <thead>
+          <tr style="background-color:#050811; border-bottom:2px solid {NEON_GREEN_HEX}; color:{NEON_GREEN_HEX}; font-size:10px; text-transform:uppercase;">
+            <th style="padding:8px; text-align:center;">Rank</th>
+            <th style="padding:8px; text-align:left;">Mercado / Selección</th>
+            <th style="padding:8px; text-align:center;">Prob. Modelo (%)</th>
+            <th style="padding:8px; text-align:center;">Implícita No-Vig (%)</th>
+            <th style="padding:8px; text-align:center;">Edge / EV (%)</th>
+            <th style="padding:8px; text-align:right;">Confianza / Varianza</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(filas_high_prob_html)}
+        </tbody>
+      </table>
+
+      <div style="margin-top:12px;">
+        {exec_report_html}
+      </div>
+    </div>
+
     <!-- TABLA DE PROYECCIONES Y CUOTAS CON +EV >= 4.0% EN #00ffcc -->
     <div style="padding:20px 28px;">
       <h2 style="margin:0 0 12px 0; font-size:14px; text-transform:uppercase; letter-spacing:1px; color:#f8fafc;">
@@ -396,16 +472,38 @@ def generar_reporte_diario_nba(
         )
         sim_results.append(res_mc)
 
-    # 5. Generar DataFrame de exportación, buffer Excel en memoria y codificación Base64
+    # 5. Generar DataFrame de exportación, vista Ranking_Alta_Probabilidad, informe ejecutivo y Excel en memoria
     export_df = build_nba_predictions_export_df(
         sim_results,
         slate_meta=slate_meta if slate_meta else None,
         fecha_str=fecha_iso,
     )
-    excel_buffer = export_nba_excel_bytes(export_df)
+    high_prob_df = build_highest_probability_sheet(
+        sim_results,
+        slate_meta=slate_meta if slate_meta else None,
+        fecha_str=fecha_iso,
+    )
+    exec_report = generate_executive_quant_report(
+        sim_results,
+        high_prob_df=high_prob_df,
+        top_n=3,
+    )
+
+    excel_buffer = export_nba_excel_bytes(
+        export_df,
+        high_prob_df=high_prob_df,
+        results_list=sim_results,
+    )
     excel_bytes = excel_buffer.getvalue() if hasattr(excel_buffer, "getvalue") else bytes(excel_buffer)
     excel_base64 = base64.b64encode(excel_bytes).decode("utf-8")
     filename_xlsx = f"nba_quant_predictions_{fecha_iso}.xlsx"
+
+    high_prob_buffer = export_high_probability_excel_bytes(high_prob_df)
+    high_prob_excel_bytes = (
+        high_prob_buffer.getvalue() if hasattr(high_prob_buffer, "getvalue") else bytes(high_prob_buffer)
+    )
+    high_prob_excel_base64 = base64.b64encode(high_prob_excel_bytes).decode("utf-8")
+    high_prob_filename_xlsx = "nba_high_probability_picks.xlsx"
 
     html_body = construir_html_reporte_nba(
         sim_results=sim_results,
@@ -413,6 +511,8 @@ def generar_reporte_diario_nba(
         fecha_obj=target_date,
         bajas_por_equipo=bajas_por_equipo,
         fuente_rosters=fuente_rosters,
+        high_prob_df=high_prob_df,
+        exec_report=exec_report,
     )
 
     return {
@@ -422,8 +522,13 @@ def generar_reporte_diario_nba(
         "filename": filename_xlsx,
         "excel_bytes": excel_bytes,
         "excel_base64": excel_base64,
+        "high_prob_filename": high_prob_filename_xlsx,
+        "high_prob_excel_bytes": high_prob_excel_bytes,
+        "high_prob_excel_base64": high_prob_excel_base64,
         "html": html_body,
         "export_df": export_df,
+        "high_prob_df": high_prob_df,
+        "executive_report": exec_report,
         "sim_results": sim_results,
     }
 

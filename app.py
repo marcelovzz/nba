@@ -36,6 +36,7 @@ from engine_nba import (
     aplicar_lesiones_a_lineups,
     auditar_partido_nba,
     build_default_lineups_dict,
+    build_highest_probability_sheet,
     build_nba_predictions_export_df,
     calibrar_ratings_nba,
     calcular_desglose_5000_simulaciones,
@@ -44,11 +45,13 @@ from engine_nba import (
     construir_excel_plantilla_bytes,
     evaluar_valor_spread_nba,
     evaluar_valor_totales_nba,
+    export_high_probability_excel_bytes,
     export_nba_excel_bytes,
     extraer_bajas_detectadas_de_lineups,
     extraer_bajas_detectadas_equipo,
     extract_executive_radar,
     generar_dataframe_plantilla_excel,
+    generate_executive_quant_report,
     obtener_lineup_en_sesion,
     parsear_excel_a_lineups,
     proyectar_props_jugador,
@@ -1830,15 +1833,33 @@ def main() -> None:
         slate_meta=pre_slate_meta,
         fecha_str=fecha_seleccionada.strftime("%Y-%m-%d"),
     )
+    high_prob_df_sidebar = build_highest_probability_sheet(
+        pre_sim_results,
+        slate_meta=pre_slate_meta,
+        fecha_str=fecha_seleccionada.strftime("%Y-%m-%d"),
+    )
     st.session_state.export_df_nba = export_df
+    st.session_state.high_prob_df_nba = high_prob_df_sidebar
 
     with st.sidebar.expander("📤 Exportar Proyecciones (5,000 Sims)", expanded=True):
         st.download_button(
             label="📥 Descargar Proyecciones NBA (.xlsx)",
-            data=export_nba_excel_bytes(export_df),
+            data=export_nba_excel_bytes(
+                export_df,
+                high_prob_df=high_prob_df_sidebar,
+                results_list=pre_sim_results,
+            ),
             file_name="nba_quant_predictions.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+        )
+        st.download_button(
+            label="🎯 Ranking Alta Probabilidad (.xlsx)",
+            data=export_high_probability_excel_bytes(high_prob_df_sidebar),
+            file_name="nba_high_probability_picks.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="sidebar_dl_high_prob_xlsx",
         )
         st.download_button(
             label="📄 Exportar Proyecciones NBA (.csv)",
@@ -1940,17 +1961,55 @@ def main() -> None:
                     slate_meta=slate_meta,
                     fecha_str=fecha_seleccionada.strftime("%Y-%m-%d"),
                 )
-                q_dl1, q_dl2 = st.columns(2)
+                high_prob_df_active = build_highest_probability_sheet(
+                    sim_results,
+                    slate_meta=slate_meta,
+                    fecha_str=fecha_seleccionada.strftime("%Y-%m-%d"),
+                )
+                exec_report_active = generate_executive_quant_report(
+                    sim_results,
+                    high_prob_df=high_prob_df_active,
+                    top_n=3,
+                )
+
+                with st.expander(
+                    "🎯 TOP PICKS: MAYOR CERTEZA CUANTITATIVA (HIGH-CONFIDENCE ANCHORS)",
+                    expanded=True,
+                ):
+                    st.markdown(
+                        exec_report_active.html,
+                        unsafe_allow_html=True,
+                    )
+                    st.dataframe(
+                        high_prob_df_active,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                q_dl1, q_dl2, q_dl3 = st.columns(3)
                 with q_dl1:
                     st.download_button(
-                        label="📥 Descargar Proyecciones NBA (.xlsx)",
-                        data=export_nba_excel_bytes(export_df_active),
+                        label="📥 Descargar Proyecciones + Ranking (.xlsx)",
+                        data=export_nba_excel_bytes(
+                            export_df_active,
+                            high_prob_df=high_prob_df_active,
+                            results_list=sim_results,
+                        ),
                         file_name="nba_quant_predictions.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                         key="main_slate_dl_xlsx",
                     )
                 with q_dl2:
+                    st.download_button(
+                        label="🎯 Descargar Ranking Alta Probabilidad (.xlsx)",
+                        data=export_high_probability_excel_bytes(high_prob_df_active),
+                        file_name="nba_high_probability_picks.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="main_slate_dl_high_prob_xlsx",
+                    )
+                with q_dl3:
                     st.download_button(
                         label="📄 Exportar Proyecciones NBA (.csv)",
                         data=export_df_active.to_csv(index=False).encode("utf-8-sig"),
