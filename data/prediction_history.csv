@@ -15,13 +15,13 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909935,2026-11-04,LA Clippers,Miami Heat,LAC,MIA,113.86,109.47,4.4,223.33,evaluated,116.0,117.0,-1.0,233.0,-5.4,9.67,2026-11-05T17:56:02Z
 401909936,2026-11-05,Phoenix Suns,Orlando Magic,PHX,ORL,116.43,107.87,8.56,224.3,evaluated,117.0,104.0,13.0,221.0,4.44,-3.3,2026-11-06T17:16:48Z
 401909937,2026-11-05,Golden State Warriors,Miami Heat,GSW,MIA,116.73,111.32,5.4,228.05,evaluated,120.0,100.0,20.0,220.0,14.6,-8.05,2026-11-06T17:16:48Z
-401909287,2026-11-06,Atlanta Hawks,Washington Wizards,ATL,WAS,122.53,110.95,11.58,233.48,pending,,,,,,,
-401909288,2026-11-06,Charlotte Hornets,Boston Celtics,CHA,BOS,109.41,121.26,-11.85,230.68,pending,,,,,,,
-401909289,2026-11-06,Cleveland Cavaliers,Philadelphia 76ers,CLE,PHI,121.49,115.09,6.39,236.58,pending,,,,,,,
-401909290,2026-11-06,Dallas Mavericks,Utah Jazz,DAL,UTA,123.48,110.28,13.21,233.76,pending,,,,,,,
-401909291,2026-11-06,Memphis Grizzlies,Oklahoma City Thunder,MEM,OKC,118.0,119.79,-1.79,237.79,pending,,,,,,,
-401909292,2026-11-06,Milwaukee Bucks,Toronto Raptors,MIL,TOR,122.35,109.88,12.47,232.23,pending,,,,,,,
-401909293,2026-11-06,New Orleans Pelicans,Minnesota Timberwolves,NOP,MIN,112.82,113.58,-0.76,226.4,pending,,,,,,,
+401909287,2026-11-06,Atlanta Hawks,Washington Wizards,ATL,WAS,122.53,110.95,11.58,233.48,evaluated,139.0,132.0,7.0,271.0,-4.58,37.52,2026-11-07T04:24:25Z
+401909288,2026-11-06,Charlotte Hornets,Boston Celtics,CHA,BOS,109.41,121.26,-11.85,230.68,evaluated,80.0,119.0,-39.0,199.0,-27.15,-31.68,2026-11-07T04:24:25Z
+401909289,2026-11-06,Cleveland Cavaliers,Philadelphia 76ers,CLE,PHI,121.49,115.09,6.39,236.58,evaluated,119.0,95.0,24.0,214.0,17.61,-22.58,2026-11-07T04:24:25Z
+401909290,2026-11-06,Dallas Mavericks,Utah Jazz,DAL,UTA,123.48,110.28,13.21,233.76,evaluated,112.0,100.0,12.0,212.0,-1.21,-21.76,2026-11-07T04:24:25Z
+401909291,2026-11-06,Memphis Grizzlies,Oklahoma City Thunder,MEM,OKC,118.0,119.79,-1.79,237.79,evaluated,97.0,128.0,-31.0,225.0,-29.21,-12.79,2026-11-07T04:24:25Z
+401909292,2026-11-06,Milwaukee Bucks,Toronto Raptors,MIL,TOR,122.35,109.88,12.47,232.23,evaluated,107.0,121.0,-14.0,228.0,-26.47,-4.23,2026-11-07T04:24:25Z
+401909293,2026-11-06,New Orleans Pelicans,Minnesota Timberwolves,NOP,MIN,112.82,113.58,-0.76,226.4,evaluated,109.0,115.0,-6.0,224.0,-5.24,-2.4,2026-11-07T04:24:25Z
 401909294,2026-11-06,Los Angeles Lakers,Portland Trail Blazers,LAL,POR,119.31,107.37,11.94,226.68,pending,,,,,,,
 401909295,2026-11-06,Sacramento Kings,San Antonio Spurs,SAC,SAS,121.09,114.59,6.5,235.69,pending,,,,,,,
 401909938,2026-11-07,Indiana Pacers,Denver Nuggets,IND,DEN,118.82,119.27,-0.44,238.09,pending,,,,,,,
