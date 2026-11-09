@@ -31,13 +31,13 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909942,2026-11-07,Golden State Warriors,Orlando Magic,GSW,ORL,116.8,108.29,8.51,225.1,evaluated,126.0,119.0,7.0,245.0,-1.51,19.9,2026-11-08T16:34:57Z
 401909943,2026-11-07,Phoenix Suns,Houston Rockets,PHX,HOU,118.19,114.07,4.13,232.26,evaluated,102.0,99.0,3.0,201.0,-1.13,-31.26,2026-11-08T16:34:57Z
 401909944,2026-11-07,Portland Trail Blazers,San Antonio Spurs,POR,SAS,111.78,112.85,-1.07,224.63,evaluated,103.0,125.0,-22.0,228.0,-20.93,3.37,2026-11-08T16:34:57Z
-401909945,2026-11-08,Chicago Bulls,Philadelphia 76ers,CHI,PHI,113.36,118.24,-4.88,231.6,pending,,,,,,,
-401909946,2026-11-08,Detroit Pistons,Los Angeles Lakers,DET,LAL,111.83,118.61,-6.78,230.44,pending,,,,,,,
-401909947,2026-11-08,Minnesota Timberwolves,Utah Jazz,MIN,UTA,117.86,107.72,10.14,225.58,pending,,,,,,,
-401909948,2026-11-08,Dallas Mavericks,Brooklyn Nets,DAL,BKN,120.07,107.84,12.23,227.92,pending,,,,,,,
-401909949,2026-11-08,Milwaukee Bucks,Boston Celtics,MIL,BOS,117.85,122.1,-4.24,239.95,pending,,,,,,,
-401909950,2026-11-08,LA Clippers,New Orleans Pelicans,LAC,NOP,116.71,110.94,5.78,227.65,pending,,,,,,,
-401909951,2026-11-08,Sacramento Kings,Miami Heat,SAC,MIA,116.34,112.46,3.88,228.8,pending,,,,,,,
+401909945,2026-11-08,Chicago Bulls,Philadelphia 76ers,CHI,PHI,113.36,118.24,-4.88,231.6,evaluated,121.0,127.0,-6.0,248.0,-1.12,16.4,2026-11-09T20:34:39Z
+401909946,2026-11-08,Detroit Pistons,Los Angeles Lakers,DET,LAL,111.83,118.61,-6.78,230.44,evaluated,116.0,121.0,-5.0,237.0,1.78,6.56,2026-11-09T20:34:39Z
+401909947,2026-11-08,Minnesota Timberwolves,Utah Jazz,MIN,UTA,117.86,107.72,10.14,225.58,evaluated,115.0,100.0,15.0,215.0,4.86,-10.58,2026-11-09T20:34:39Z
+401909948,2026-11-08,Dallas Mavericks,Brooklyn Nets,DAL,BKN,120.07,107.84,12.23,227.92,evaluated,130.0,93.0,37.0,223.0,24.77,-4.92,2026-11-09T20:34:39Z
+401909949,2026-11-08,Milwaukee Bucks,Boston Celtics,MIL,BOS,117.85,122.1,-4.24,239.95,evaluated,97.0,117.0,-20.0,214.0,-15.76,-25.95,2026-11-09T20:34:39Z
+401909950,2026-11-08,LA Clippers,New Orleans Pelicans,LAC,NOP,116.71,110.94,5.78,227.65,evaluated,139.0,123.0,16.0,262.0,10.22,34.35,2026-11-09T20:34:39Z
+401909951,2026-11-08,Sacramento Kings,Miami Heat,SAC,MIA,116.34,112.46,3.88,228.8,evaluated,108.0,114.0,-6.0,222.0,-9.88,-6.8,2026-11-09T20:34:39Z
 401909952,2026-11-09,Atlanta Hawks,Los Angeles Lakers,ATL,LAL,119.03,115.72,3.31,234.75,pending,,,,,,,
 401909953,2026-11-09,Charlotte Hornets,Cleveland Cavaliers,CHA,CLE,108.43,121.53,-13.09,229.96,pending,,,,,,,
 401909954,2026-11-09,Detroit Pistons,Washington Wizards,DET,WAS,115.11,110.34,4.76,225.45,pending,,,,,,,
