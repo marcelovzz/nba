@@ -62,10 +62,10 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909973,2026-11-11,Utah Jazz,Orlando Magic,UTA,ORL,106.08,109.81,-3.73,215.89,evaluated,108.0,123.0,-15.0,231.0,-11.27,15.11,2026-11-12T18:02:25Z
 401909974,2026-11-11,Houston Rockets,Golden State Warriors,HOU,GSW,116.7,117.8,-1.1,234.51,evaluated,115.0,108.0,7.0,223.0,8.1,-11.51,2026-11-12T18:02:25Z
 401909975,2026-11-11,Portland Trail Blazers,Oklahoma City Thunder,POR,OKC,107.8,120.11,-12.31,227.92,evaluated,118.0,108.0,10.0,226.0,22.31,-1.92,2026-11-12T18:02:25Z
-401909976,2026-11-12,Philadelphia 76ers,Toronto Raptors,PHI,TOR,119.46,108.69,10.77,228.15,pending,,,,,,,
-401909977,2026-11-12,Washington Wizards,Detroit Pistons,WAS,DET,112.4,113.04,-0.64,225.44,pending,,,,,,,
-401909978,2026-11-12,Minnesota Timberwolves,Dallas Mavericks,MIN,DAL,115.64,117.07,-1.43,232.71,pending,,,,,,,
-401909979,2026-11-12,Phoenix Suns,Charlotte Hornets,PHX,CHA,118.76,107.36,11.4,226.12,pending,,,,,,,
+401909976,2026-11-12,Philadelphia 76ers,Toronto Raptors,PHI,TOR,119.46,108.69,10.77,228.15,evaluated,123.0,112.0,11.0,235.0,0.23,6.85,2026-11-13T17:36:15Z
+401909977,2026-11-12,Washington Wizards,Detroit Pistons,WAS,DET,112.4,113.04,-0.64,225.44,evaluated,140.0,144.0,-4.0,284.0,-3.36,58.56,2026-11-13T17:36:15Z
+401909978,2026-11-12,Minnesota Timberwolves,Dallas Mavericks,MIN,DAL,115.64,117.07,-1.43,232.71,evaluated,133.0,94.0,39.0,227.0,40.43,-5.71,2026-11-13T17:36:15Z
+401909979,2026-11-12,Phoenix Suns,Charlotte Hornets,PHX,CHA,118.76,107.36,11.4,226.12,evaluated,101.0,96.0,5.0,197.0,-6.4,-29.12,2026-11-13T17:36:15Z
 401909296,2026-11-13,Indiana Pacers,New York Knicks,IND,NYK,117.18,118.82,-1.64,236.0,pending,,,,,,,
 401909297,2026-11-13,Orlando Magic,Milwaukee Bucks,ORL,MIL,112.66,112.07,0.59,224.74,pending,,,,,,,
 401909298,2026-11-13,Miami Heat,Cleveland Cavaliers,MIA,CLE,113.88,117.79,-3.91,231.67,pending,,,,,,,
