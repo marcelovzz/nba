@@ -265,13 +265,39 @@ ESPN_TO_NBA_ABBR: Dict[str, str] = {
 }
 
 NBA_ABBR_TO_ESPN_LOGO: Dict[str, str] = {
-    "GSW": "gs",
-    "NOP": "no",
-    "NYK": "ny",
-    "SAS": "sa",
-    "UTA": "utah",
-    "WAS": "wsh",
+    "NO": "nop",
+    "NOP": "nop",
+    "UTAH": "uta",
+    "UTA": "uta",
+    "GS": "gsw",
+    "GSW": "gsw",
+    "SA": "sas",
+    "SAS": "sas",
+    "NY": "nyk",
+    "NYK": "nyk",
+    "WSH": "was",
+    "WAS": "was",
 }
+
+
+def get_nba_logo_url(team_abbr: str) -> str:
+    """
+    Devuelve la URL oficial del escudo de ESPN NBA:
+        'https://a.espncdn.com/i/teamlogos/nba/500/{abbr_lower}.png'
+    Incluye el mapeo oficial de excepciones de ESPN:
+      - 'NO' / 'NOP' -> 'nop'
+      - 'UTAH' / 'UTA' -> 'uta'
+      - 'GS' / 'GSW' -> 'gsw'
+      - 'SA' / 'SAS' -> 'sas'
+      - 'NY' / 'NYK' -> 'nyk'
+    """
+    raw = str(team_abbr or "").strip().upper()
+    if raw in NBA_ABBR_TO_ESPN_LOGO:
+        abbr_lower = NBA_ABBR_TO_ESPN_LOGO[raw]
+    else:
+        norm = normalizar_abbr_nba(raw)
+        abbr_lower = NBA_ABBR_TO_ESPN_LOGO.get(norm, norm.lower())
+    return f"https://a.espncdn.com/i/teamlogos/nba/500/{abbr_lower}.png"
 
 
 def normalizar_abbr_nba(team_identifier: str) -> str:
@@ -457,12 +483,10 @@ def estimar_espn_bpi_probabilidades(
 
 def escudo_nba_html(team_abbr: str, size: int = 32) -> str:
     """
-    Genera la etiqueta <img> usando el CDN público de ESPN:
-    https://a.espncdn.com/i/teamlogos/nba/500/{abbr}.png
+    Genera la etiqueta <img> usando `get_nba_logo_url(team_abbr)` del CDN público de ESPN:
+    https://a.espncdn.com/i/teamlogos/nba/500/{abbr_lower}.png
     """
-    abbr = normalizar_abbr_nba(team_abbr)
-    logo_code = NBA_ABBR_TO_ESPN_LOGO.get(abbr, abbr.lower())
-    url = f"https://a.espncdn.com/i/teamlogos/nba/500/{logo_code}.png"
+    url = get_nba_logo_url(team_abbr)
     return (
         f'<img src="{url}" width="{size}" height="{size}" '
         f'style="object-fit: contain; vertical-align: middle; margin-right: 8px;">'

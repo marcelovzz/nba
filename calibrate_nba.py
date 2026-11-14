@@ -10,11 +10,13 @@ import requests
 
 import engine_nba
 from engine_nba import (
+    AUDIT_LOG_COLS,
     DEFAULT_CSV_DATA,
     ELO_BAYES_K,
     PREDICTION_HISTORY_COLS,
     PREDICTION_HISTORY_CSV_FILENAME,
     TEAM_RATINGS_STATE_FILENAME,
+    append_audit_log_to_master_excel,
     cargar_rosters_plantilla_excel,
     obtener_lineup_en_sesion,
     run_monte_carlo_matchup,
@@ -253,8 +255,12 @@ def _guardar_rating_actualizado_equipo(
     rating_nuevo: float,
     delta_aplicado: float,
     now_iso: str,
-) -> None:
-    """Actualiza el Net Rating, Off_Rtg y Def_Rtg de la franquicia en `state_data` (por abbr y nombre)."""
+    total_error: float = 0.0,
+) -> Dict[str, float]:
+    """
+    Actualiza el Net Rating, Off_Rtg y Def_Rtg de la franquicia en `state_data` (por abbr y nombre)
+    y retorna un diccionario con `Off_Rtg_Prev`, `Off_Rtg_New`, `Delta_Off`, `Def_Rtg_Prev`, `Def_Rtg_New`, `Delta_Def`.
+    """
     teams_pool = state_data.setdefault("teams", {})
     existing = teams_pool.get(team_abbr) or teams_pool.get(team_name) or state_data.get(team_abbr) or {}
     if not isinstance(existing, dict):
@@ -263,10 +269,15 @@ def _guardar_rating_actualizado_equipo(
     prev_elo_delta = float(existing.get("elo_delta", 0.0))
     prev_games = int(existing.get("games_calibrated", 0))
     base_rtg = float(existing.get("baseline_rating", rating_nuevo - delta_aplicado))
-    prev_off = float(existing.get("off_rtg", 115.5 + (rating_nuevo / 2.0)))
+    prev_rating = round(float(rating_nuevo - delta_aplicado), 2)
+    prev_off = round(float(existing.get("off_rtg", 115.5 + (prev_rating / 2.0))), 2)
+    prev_def = round(float(existing.get("def_rtg", prev_off - prev_rating)), 2)
 
-    new_off = round(float(np.clip(prev_off + (delta_aplicado / 2.0), 98.0, 132.0)), 1)
-    new_def = round(float(np.clip(new_off - rating_nuevo, 98.0, 132.0)), 1)
+    tot_adj = 0.015 * float(total_error)
+    new_off = round(float(np.clip(prev_off + (delta_aplicado / 2.0) + tot_adj, 98.0, 132.0)), 2)
+    new_def = round(float(np.clip(prev_def - (delta_aplicado / 2.0) + tot_adj, 98.0, 132.0)), 2)
+    delta_off = round(new_off - prev_off, 2)
+    delta_def = round(new_def - prev_def, 2)
 
     updated_entry = {
         "team": team_name,
@@ -275,8 +286,8 @@ def _guardar_rating_actualizado_equipo(
         "net_rating": round(float(rating_nuevo), 2),
         "baseline_rating": round(base_rtg, 2),
         "rating_base_preseason": round(float(existing.get("rating_base_preseason", base_rtg)), 2),
-        "off_rtg": new_off,
-        "def_rtg": new_def,
+        "off_rtg": round(new_off, 1),
+        "def_rtg": round(new_def, 1),
         "elo_delta": round(prev_elo_delta + delta_aplicado, 3),
         "last_delta": round(delta_aplicado, 3),
         "games_calibrated": prev_games + 1,
@@ -286,6 +297,15 @@ def _guardar_rating_actualizado_equipo(
     teams_pool[team_name] = dict(updated_entry)
     state_data[team_abbr] = updated_entry
     state_data[team_name] = dict(updated_entry)
+
+    return {
+        "Off_Rtg_Prev": prev_off,
+        "Off_Rtg_New": new_off,
+        "Delta_Off": delta_off,
+        "Def_Rtg_Prev": prev_def,
+        "Def_Rtg_New": new_def,
+        "Delta_Def": delta_def,
+    }
 
 
 def ejecutar_autocalibracion_jornada(
@@ -347,6 +367,7 @@ def ejecutar_autocalibracion_jornada(
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     partidos_calibrados: List[Dict[str, Any]] = []
+    nuevas_filas_audit_log: List[Dict[str, Any]] = []
 
     for game in marcadores:
         h_abbr = str(game.get("home_abbr") or name_to_abbr.get(str(game.get("home_team", "")).lower(), "")).upper()
@@ -464,8 +485,54 @@ def ejecutar_autocalibracion_jornada(
             k=k_factor,
         )
 
-        _guardar_rating_actualizado_equipo(state_data, h_abbr, h_team, new_home_rtg, delta_home, now_iso)
-        _guardar_rating_actualizado_equipo(state_data, a_abbr, a_team, new_away_rtg, delta_away, now_iso)
+        rtg_metrics_home = _guardar_rating_actualizado_equipo(
+            state_data, h_abbr, h_team, new_home_rtg, delta_home, now_iso, total_error=total_error
+        )
+        rtg_metrics_away = _guardar_rating_actualizado_equipo(
+            state_data, a_abbr, a_team, new_away_rtg, delta_away, now_iso, total_error=total_error
+        )
+
+        matchup_str = f"{a_abbr} @ {h_abbr}"
+        marcador_real_str = f"{int(round(real_a_score))}-{int(round(real_h_score))}"
+        proy_spread_home = round(-proj_margin_home, 2)
+
+        # Agregar filas para Audit_Log (Visita y Local)
+        nuevas_filas_audit_log.append(
+            {
+                "Fecha": fecha_iso,
+                "Partido": matchup_str,
+                "Marcador_Real": marcador_real_str,
+                "Proy_Spread": proy_spread_home,
+                "Error_Spread": margin_error_home,
+                "Proy_Total": round(proj_total, 2),
+                "Error_Total": total_error,
+                "Equipo": a_abbr,
+                "Off_Rtg_Prev": rtg_metrics_away["Off_Rtg_Prev"],
+                "Off_Rtg_New": rtg_metrics_away["Off_Rtg_New"],
+                "Delta_Off": rtg_metrics_away["Delta_Off"],
+                "Def_Rtg_Prev": rtg_metrics_away["Def_Rtg_Prev"],
+                "Def_Rtg_New": rtg_metrics_away["Def_Rtg_New"],
+                "Delta_Def": rtg_metrics_away["Delta_Def"],
+            }
+        )
+        nuevas_filas_audit_log.append(
+            {
+                "Fecha": fecha_iso,
+                "Partido": matchup_str,
+                "Marcador_Real": marcador_real_str,
+                "Proy_Spread": proy_spread_home,
+                "Error_Spread": margin_error_home,
+                "Proy_Total": round(proj_total, 2),
+                "Error_Total": total_error,
+                "Equipo": h_abbr,
+                "Off_Rtg_Prev": rtg_metrics_home["Off_Rtg_Prev"],
+                "Off_Rtg_New": rtg_metrics_home["Off_Rtg_New"],
+                "Delta_Off": rtg_metrics_home["Delta_Off"],
+                "Def_Rtg_Prev": rtg_metrics_home["Def_Rtg_Prev"],
+                "Def_Rtg_New": rtg_metrics_home["Def_Rtg_New"],
+                "Delta_Def": rtg_metrics_home["Delta_Def"],
+            }
+        )
 
         # Marcar partido como evaluado en prediction_history.csv
         df_hist.loc[match_idx, "home_abbr"] = h_abbr
@@ -482,7 +549,7 @@ def ejecutar_autocalibracion_jornada(
         partidos_calibrados.append(
             {
                 "game_id": str(df_hist.loc[match_idx, "game_id"]),
-                "matchup": f"{a_abbr} @ {h_abbr}",
+                "matchup": matchup_str,
                 "projected_margin_home": proj_margin_home,
                 "actual_margin_home": real_margin_home,
                 "margin_error": margin_error_home,
@@ -505,10 +572,14 @@ def ejecutar_autocalibracion_jornada(
 
     df_hist.to_csv(target_history, index=False, encoding="utf-8")
 
+    # Persistir registro diario en modo append en la pestaña 'Audit_Log' del Excel maestro (nba_rosters_plantilla.xlsx)
+    audit_log_df = append_audit_log_to_master_excel(nuevas_filas_audit_log)
+
     return {
         "fecha_evaluada": fecha_iso,
         "partidos_finalizados_espn": len(marcadores),
         "partidos_calibrados": len(partidos_calibrados),
+        "audit_log_rows_total": len(audit_log_df),
         "detalles": partidos_calibrados,
         "state_path": str(target_state),
         "history_path": str(target_history),

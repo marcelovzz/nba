@@ -22,6 +22,7 @@ from sync_espn import (
     NBA_SEASON_TARGET,
     escudo_nba_html,
     formatear_fecha_larga_es,
+    get_nba_logo_url,
     load_clean_nba_dataframe,
     obtener_calendario_nba,
     obtener_calendario_nba_hoy,
@@ -29,11 +30,13 @@ from sync_espn import (
     sincronizar_datos_nba_api,
 )
 from engine_nba import (
+    AUDIT_LOG_COLS,
     FULL_30_TEAM_SLATE,
     GAME_SLATE_TIMES,
     LINEUP_COLS,
     ROSTER_EDITOR_COLS,
     aplicar_lesiones_a_lineups,
+    append_audit_log_to_master_excel,
     auditar_partido_nba,
     build_default_lineups_dict,
     build_highest_probability_sheet,
@@ -41,6 +44,7 @@ from engine_nba import (
     calibrar_ratings_nba,
     calcular_desglose_5000_simulaciones,
     calcular_ratings_lineup,
+    cargar_audit_log_df,
     cargar_rosters_plantilla_excel,
     construir_excel_plantilla_bytes,
     evaluar_valor_spread_nba,
@@ -1074,6 +1078,132 @@ def render_predictions_export_panel(export_df: pd.DataFrame, key_suffix: str = "
         st.dataframe(export_df, use_container_width=True, hide_index=True)
 
 
+def render_audit_log_dashboard_section() -> None:
+    """
+    Lee la pestaña `Audit_Log` del Excel maestro (`nba_rosters_plantilla.xlsx`) y muestra:
+      1. Métricas KPI: MAE (Error Medio Absoluto) histórico de Spread y Totales, y % de acierto acumulado.
+      2. Tabla filtrable con los ajustes diarios aplicados a cada equipo ('Delta_Off', 'Delta_Def') y su escudo oficial.
+      3. Gráfico de evolución de ratings ('Off_Rtg_New', 'Def_Rtg_New' y deltas).
+    """
+    df_audit = cargar_audit_log_df()
+
+    st.markdown(
+        '<div class="section-banner">'
+        '<div class="section-banner-title">📊 REGISTRO HISTÓRICO DE AUTO-AUDITORÍA DIARIA (PESTAÑA AUDIT_LOG)</div>'
+        '<div class="section-banner-tag">FEEDBACK LOOP BAYESIANO/ELO &bull; TRAZABILIDAD DE DELTAS OFF_RTG &amp; DEF_RTG</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if df_audit.empty:
+        st.info("Aún no hay registros en la pestaña 'Audit_Log'.")
+        return
+
+    # Cálculo de KPIs sobre partidos únicos en Audit_Log
+    df_games_unique = df_audit.drop_duplicates(subset=["Fecha", "Partido"]).copy()
+    err_sp_series = pd.to_numeric(df_games_unique["Error_Spread"], errors="coerce").fillna(0.0)
+    err_tot_series = pd.to_numeric(df_games_unique["Error_Total"], errors="coerce").fillna(0.0)
+    proy_sp_series = pd.to_numeric(df_games_unique["Proy_Spread"], errors="coerce").fillna(0.0)
+
+    mae_spread = float(err_sp_series.abs().mean()) if not err_sp_series.empty else 0.0
+    mae_total = float(err_tot_series.abs().mean()) if not err_tot_series.empty else 0.0
+
+    # Calcular % de acierto acumulado (ganador proyectado vs marcador real)
+    aciertos = 0
+    total_eval = 0
+    for _, g_row in df_games_unique.iterrows():
+        marc_str = str(g_row.get("Marcador_Real", ""))
+        if "-" in marc_str:
+            parts = marc_str.split("-")
+            if len(parts) == 2:
+                try:
+                    sc_away = float(parts[0])
+                    sc_home = float(parts[1])
+                    real_margin_home = sc_home - sc_away
+                    proj_margin_home = -float(g_row.get("Proy_Spread", 0.0))
+                    if (real_margin_home >= 0 and proj_margin_home >= 0) or (
+                        real_margin_home < 0 and proj_margin_home < 0
+                    ):
+                        aciertos += 1
+                    total_eval += 1
+                except ValueError:
+                    pass
+    pct_acierto = (aciertos / max(total_eval, 1)) * 100.0
+
+    kpi_c1, kpi_c2, kpi_c3, kpi_c4 = st.columns(4)
+    with kpi_c1:
+        st.metric("🎯 MAE Spread Histórico", f"{mae_spread:.2f} pts", f"{len(df_games_unique)} juegos auditados")
+    with kpi_c2:
+        st.metric("🔥 MAE Totales Histórico", f"{mae_total:.2f} pts", "Línea Total Proy vs Real")
+    with kpi_c3:
+        st.metric("🏆 % Acierto Acumulado", f"{pct_acierto:.1f}%", f"{aciertos}/{max(total_eval, 1)} ganadores")
+    with kpi_c4:
+        st.metric("⚙️ Ajustes de Equipos (Audit_Log)", f"{len(df_audit)} registros", "Modo Append Activo")
+
+    # Filtros interactivos por Equipo y Fecha
+    flt_c1, flt_c2 = st.columns([2.2, 1.8])
+    equipos_disponibles = sorted(df_audit["Equipo"].astype(str).unique().tolist())
+    fechas_disponibles = sorted(df_audit["Fecha"].astype(str).unique().tolist(), reverse=True)
+
+    with flt_c1:
+        equipos_sel = st.multiselect(
+            "Filtrar por Equipo (Delta_Off / Delta_Def):",
+            options=equipos_disponibles,
+            default=[],
+            placeholder="Todos los equipos (o selecciona 1+ franquicias)...",
+            key="audit_log_filter_teams",
+        )
+    with flt_c2:
+        fechas_sel = st.multiselect(
+            "Filtrar por Fecha de Jornada:",
+            options=fechas_disponibles,
+            default=[],
+            placeholder="Todas las fechas...",
+            key="audit_log_filter_dates",
+        )
+
+    df_filtered = df_audit.copy()
+    if equipos_sel:
+        df_filtered = df_filtered[df_filtered["Equipo"].isin(equipos_sel)].copy()
+    if fechas_sel:
+        df_filtered = df_filtered[df_filtered["Fecha"].isin(fechas_sel)].copy()
+
+    df_display = df_filtered.copy()
+    df_display.insert(0, "Escudo", df_display["Equipo"].astype(str).apply(get_nba_logo_url))
+
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Escudo": st.column_config.ImageColumn("Escudo", width="small"),
+            "Delta_Off": st.column_config.NumberColumn("Delta_Off", format="%+.2f"),
+            "Delta_Def": st.column_config.NumberColumn("Delta_Def", format="%+.2f"),
+            "Error_Spread": st.column_config.NumberColumn("Error_Spread", format="%+.2f"),
+            "Error_Total": st.column_config.NumberColumn("Error_Total", format="%+.2f"),
+        },
+    )
+
+    # Gráfico de evolución de ratings y deltas
+    st.markdown(
+        '<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.80rem; color:#00F5D4; margin:10px 0 6px 0;">'
+        '📈 EVOLUCIÓN DE RATINGS Y AJUSTES DIARIOS (OFF_RTG_NEW vs DEF_RTG_NEW &bull; DELTA_OFF / DELTA_DEF)'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    ch_col1, ch_col2 = st.columns(2)
+    with ch_col1:
+        chart_team_df = df_filtered.copy()
+        chart_team_df["Etiqueta"] = chart_team_df["Fecha"].astype(str) + " (" + chart_team_df["Equipo"].astype(str) + ")"
+        chart_rtg = chart_team_df.set_index("Etiqueta")[["Off_Rtg_New", "Def_Rtg_New"]]
+        st.line_chart(chart_rtg, use_container_width=True)
+    with ch_col2:
+        chart_deltas = (
+            df_filtered.groupby("Equipo", as_index=True)[["Delta_Off", "Delta_Def"]].sum()
+        )
+        st.bar_chart(chart_deltas, use_container_width=True)
+
+
 def render_post_game_audit_tab(
     df_teams: pd.DataFrame,
     n_sims: int,
@@ -1082,11 +1212,13 @@ def render_post_game_audit_tab(
     export_df: Optional[pd.DataFrame] = None,
 ) -> None:
     """
-    PESTAÑA 2: 📈 AUDITORÍA, CALIBRACIÓN KALMAN & EXPORTACIÓN (.XLSX / .CSV)
-    Sincronizada automáticamente con `st.session_state.fecha_nba`.
+    PESTAÑA 2: 📊 AUDITORÍA & CALIBRACIÓN (.XLSX / .CSV)
+    Sincronizada automáticamente con `st.session_state.fecha_nba` y la pestaña `Audit_Log`.
     """
     fecha_sel: date = st.session_state.get("fecha_nba", date.today())
     fecha_legible = formatear_fecha_larga_es(fecha_sel)
+
+    render_audit_log_dashboard_section()
 
     if export_df is not None and not export_df.empty:
         render_predictions_export_panel(export_df, key_suffix="audit_tab")
@@ -1276,23 +1408,49 @@ def render_post_game_audit_tab(
             a_after = df_actual[df_actual["Team_Abbr"] == a_abbr].iloc[0]
             h_after = df_actual[df_actual["Team_Abbr"] == h_abbr].iloc[0]
 
+            fecha_iso_cal = fecha_sel.strftime("%Y-%m-%d")
+            partido_cal_str = f"{a_abbr} @ {h_abbr}"
+            marcador_cal_str = f"{aud['score_away_real']:.0f}-{aud['score_home_real']:.0f}"
+            proy_sp_cal = round(float(aud["proj_spread_home"]), 2)
+
             nuevos_registros_hist.append(
                 {
-                    "Fecha": fecha_sel.strftime("%Y-%m-%d"),
-                    "Partido": f"{a_abbr} @ {h_abbr}",
-                    "Marcador_Real": f"{aud['score_away_real']:.0f}-{aud['score_home_real']:.0f}",
-                    "Proy_Modelo": f"{aud['exp_away_pts']:.1f}-{aud['exp_home_pts']:.1f}",
-                    "Error_Spread": aud["Error_Spread"],
-                    "Error_Total": aud["Error_Total"],
-                    "Error_Pace": aud["Error_Pace"],
-                    f"{a_abbr}_OffRtg": f"{a_before['Off_Rtg']:.1f} -> {a_after['Off_Rtg']:.1f}",
-                    f"{a_abbr}_DefRtg": f"{a_before['Def_Rtg']:.1f} -> {a_after['Def_Rtg']:.1f}",
-                    f"{h_abbr}_OffRtg": f"{h_before['Off_Rtg']:.1f} -> {h_after['Off_Rtg']:.1f}",
-                    f"{h_abbr}_DefRtg": f"{h_before['Def_Rtg']:.1f} -> {h_after['Def_Rtg']:.1f}",
-                    "Pace_Ajustado": f"{a_after['Pace']:.1f} / {h_after['Pace']:.1f}",
+                    "Fecha": fecha_iso_cal,
+                    "Partido": partido_cal_str,
+                    "Marcador_Real": marcador_cal_str,
+                    "Proy_Spread": proy_sp_cal,
+                    "Error_Spread": round(float(aud["Error_Spread"]), 2),
+                    "Proy_Total": round(float(aud["exp_total_pts"]), 2),
+                    "Error_Total": round(float(aud["Error_Total"]), 2),
+                    "Equipo": a_abbr,
+                    "Off_Rtg_Prev": round(float(a_before["Off_Rtg"]), 2),
+                    "Off_Rtg_New": round(float(a_after["Off_Rtg"]), 2),
+                    "Delta_Off": round(float(a_after["Off_Rtg"]) - float(a_before["Off_Rtg"]), 2),
+                    "Def_Rtg_Prev": round(float(a_before["Def_Rtg"]), 2),
+                    "Def_Rtg_New": round(float(a_after["Def_Rtg"]), 2),
+                    "Delta_Def": round(float(a_after["Def_Rtg"]) - float(a_before["Def_Rtg"]), 2),
+                }
+            )
+            nuevos_registros_hist.append(
+                {
+                    "Fecha": fecha_iso_cal,
+                    "Partido": partido_cal_str,
+                    "Marcador_Real": marcador_cal_str,
+                    "Proy_Spread": proy_sp_cal,
+                    "Error_Spread": round(float(aud["Error_Spread"]), 2),
+                    "Proy_Total": round(float(aud["exp_total_pts"]), 2),
+                    "Error_Total": round(float(aud["Error_Total"]), 2),
+                    "Equipo": h_abbr,
+                    "Off_Rtg_Prev": round(float(h_before["Off_Rtg"]), 2),
+                    "Off_Rtg_New": round(float(h_after["Off_Rtg"]), 2),
+                    "Delta_Off": round(float(h_after["Off_Rtg"]) - float(h_before["Off_Rtg"]), 2),
+                    "Def_Rtg_Prev": round(float(h_before["Def_Rtg"]), 2),
+                    "Def_Rtg_New": round(float(h_after["Def_Rtg"]), 2),
+                    "Delta_Def": round(float(h_after["Def_Rtg"]) - float(h_before["Def_Rtg"]), 2),
                 }
             )
 
+        append_audit_log_to_master_excel(nuevos_registros_hist)
         st.session_state.df_nba = sincronizar_df_nba_con_lineups(df_actual, st.session_state.lineups_nba)
         st.session_state.historial_calibracion = nuevos_registros_hist
         st.session_state.calibracion_aplicada_ok = True
@@ -1871,10 +2029,10 @@ def main() -> None:
         )
 
     # ==========================================================================
-    # DIVISIÓN PRINCIPAL EN DOS PESTAÑAS (CARTELERA EN VIVO vs AUDITORÍA & EXPORTACIÓN)
+    # DIVISIÓN PRINCIPAL EN DOS PESTAÑAS (CARTELERA EN VIVO vs AUDITORÍA & CALIBRACIÓN)
     # ==========================================================================
     tab_cartelera, tab_auditoria = st.tabs(
-        ["🏀 Cartelera & Momios en Vivo", "📈 Auditoría & Exportación"]
+        ["🏀 Cartelera & Momios en Vivo", "📊 Auditoría & Calibración"]
     )
 
     with tab_cartelera:
@@ -1980,10 +2138,24 @@ def main() -> None:
                         exec_report_active.html,
                         unsafe_allow_html=True,
                     )
+                    hp_display_df = high_prob_df_active.copy()
+                    if not hp_display_df.empty and "Partido" in hp_display_df.columns:
+                        hp_display_df.insert(
+                            1,
+                            "Escudo",
+                            hp_display_df["Partido"].astype(str).apply(
+                                lambda s: get_nba_logo_url(
+                                    s.split("(")[-1].replace(")", "").strip() if "(" in s else "BOS"
+                                )
+                            ),
+                        )
                     st.dataframe(
-                        high_prob_df_active,
+                        hp_display_df,
                         use_container_width=True,
                         hide_index=True,
+                        column_config={
+                            "Escudo": st.column_config.ImageColumn("Escudo", width="small"),
+                        },
                     )
 
                 q_dl1, q_dl2, q_dl3 = st.columns(3)

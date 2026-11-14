@@ -5,3 +5,4 @@ requests
 pyarrow
 openpyxl
 beautifulsoup4
+weasyprint

@@ -11,7 +11,11 @@ try:
     import streamlit as st
 except ImportError:
     st = None
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+try:
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+except ImportError:
+    Alignment = Border = Font = PatternFill = Side = None
 
 from sync_injuries_nba import (
     normalizar_nombre_jugador_nba,
@@ -23,7 +27,58 @@ TEAM_TOTAL_GAME_MINUTES = 240.0
 DEFAULT_ROSTERS_EXCEL_FILENAME = "nba_rosters_plantilla.xlsx"
 TEAM_RATINGS_STATE_FILENAME = "data/team_ratings_state.json"
 PREDICTION_HISTORY_CSV_FILENAME = "data/prediction_history.csv"
+AUDIT_LOG_SHEET_NAME = "Audit_Log"
+AUDIT_LOG_CSV_FILENAME = "data/audit_log.csv"
+AUDIT_LOG_COLS: List[str] = [
+    "Fecha",
+    "Partido",
+    "Marcador_Real",
+    "Proy_Spread",
+    "Error_Spread",
+    "Proy_Total",
+    "Error_Total",
+    "Equipo",
+    "Off_Rtg_Prev",
+    "Off_Rtg_New",
+    "Delta_Off",
+    "Def_Rtg_Prev",
+    "Def_Rtg_New",
+    "Delta_Def",
+]
 ELO_BAYES_K = 0.06
+
+ESPN_LOGO_EXCEPTIONS_MAP: Dict[str, str] = {
+    "NO": "nop",
+    "NOP": "nop",
+    "UTAH": "uta",
+    "UTA": "uta",
+    "GS": "gsw",
+    "GSW": "gsw",
+    "SA": "sas",
+    "SAS": "sas",
+    "NY": "nyk",
+    "NYK": "nyk",
+    "WSH": "was",
+    "WAS": "was",
+}
+
+
+def get_nba_logo_url(team_abbr: str) -> str:
+    """
+    Devuelve la URL oficial de ESPN para el escudo del equipo NBA:
+        'https://a.espncdn.com/i/teamlogos/nba/500/{abbr_lower}.png'
+    Incluye el mapeo oficial de excepciones de ESPN:
+      - 'NO' / 'NOP' -> 'nop'
+      - 'UTAH' / 'UTA' -> 'uta'
+      - 'GS' / 'GSW' -> 'gsw'
+      - 'SA' / 'SAS' -> 'sas'
+      - 'NY' / 'NYK' -> 'nyk'
+    """
+    raw = str(team_abbr or "").strip().upper()
+    if "(" in raw and ")" in raw:
+        raw = raw.split("(")[-1].replace(")", "").strip().upper()
+    abbr_lower = ESPN_LOGO_EXCEPTIONS_MAP.get(raw, raw.lower())
+    return f"https://a.espncdn.com/i/teamlogos/nba/500/{abbr_lower}.png"
 
 # Parámetros de Regresión Bayesiana a la Media (Small Sample Size Stabilization)
 BAYESIAN_STABILIZATION_GAMES = 25
@@ -1679,7 +1734,24 @@ def construir_excel_plantilla_bytes(
             c.fill = header_fill
             c.font = header_font
 
-        # Hoja 3: Bitacora_Auditoria_Kalman (si hay registros)
+        # Hoja 3: Audit_Log (Registro persistente de auto-auditoría diaria del Feedback Loop)
+        df_audit_log = cargar_audit_log_df()
+        if historial_calibracion:
+            df_extra_cal = pd.DataFrame(historial_calibracion)
+            if set(AUDIT_LOG_COLS).issubset(set(df_extra_cal.columns)):
+                df_audit_log = pd.concat(
+                    [df_audit_log, df_extra_cal[AUDIT_LOG_COLS]], ignore_index=True
+                ).drop_duplicates(subset=["Fecha", "Partido", "Equipo"], keep="last")
+        df_audit_log.to_excel(writer, index=False, sheet_name=AUDIT_LOG_SHEET_NAME)
+        ws_aud = writer.sheets[AUDIT_LOG_SHEET_NAME]
+        ws_aud.views.sheetView[0].showGridLines = True
+        ws_aud.freeze_panes = "A2"
+        for col_idx in range(1, len(AUDIT_LOG_COLS) + 1):
+            c = ws_aud.cell(row=1, column=col_idx)
+            c.fill = header_fill
+            c.font = header_font
+
+        # Hoja 4: Bitacora_Auditoria_Kalman (si hay registros manuales)
         if historial_calibracion:
             df_hist = pd.DataFrame(historial_calibracion)
             df_hist.to_excel(writer, index=False, sheet_name="Bitacora_Auditoria_Kalman")
@@ -4030,5 +4102,492 @@ def export_nba_excel_bytes(
         ws_high = writer.sheets[sheet_high]
         _estilizar_hoja_alta_probabilidad_openpyxl(ws_high, df_high_export)
 
+        # Tercera pestaña: Audit_Log (auto-auditoría histórica diaria)
+        df_audit_sheet = cargar_audit_log_df()
+        df_audit_sheet.to_excel(writer, index=False, sheet_name=AUDIT_LOG_SHEET_NAME)
+        ws_audit = writer.sheets[AUDIT_LOG_SHEET_NAME]
+        ws_audit.views.sheetView[0].showGridLines = True
+        ws_audit.freeze_panes = "A2"
+        for col_idx in range(1, len(df_audit_sheet.columns) + 1):
+            c_aud = ws_audit.cell(row=1, column=col_idx)
+            c_aud.fill = header_fill
+            c_aud.font = header_font
+            c_aud.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c_aud.border = thin_border
+
     buffer.seek(0)
     return buffer
+
+
+def _generar_audit_log_semilla_desde_historial() -> pd.DataFrame:
+    """
+    Construye los registros base de `Audit_Log` a partir de los partidos ya evaluados
+    (`status == 'evaluated'`) en `data/prediction_history.csv` cuando aún no existe
+    la pestaña `Audit_Log` en el Excel maestro.
+    """
+    hist_candidates = [
+        Path(PREDICTION_HISTORY_CSV_FILENAME),
+        Path(__file__).resolve().parent / PREDICTION_HISTORY_CSV_FILENAME,
+    ]
+    df_hist = pd.DataFrame()
+    for p in hist_candidates:
+        if p.exists():
+            try:
+                df_hist = pd.read_csv(p)
+                break
+            except Exception:
+                continue
+
+    if df_hist.empty or "status" not in df_hist.columns:
+        return pd.DataFrame(columns=AUDIT_LOG_COLS)
+
+    eval_df = df_hist[df_hist["status"].astype(str).str.lower() == "evaluated"].copy()
+    if eval_df.empty:
+        return pd.DataFrame(columns=AUDIT_LOG_COLS)
+
+    team_running_off: Dict[str, float] = {}
+    team_running_def: Dict[str, float] = {}
+    for abbr, p_meta in PRESEASON_BASE_RATINGS_30_TEAMS.items():
+        team_running_off[abbr] = round(float(p_meta.get("Off_Rtg_Base", 114.5)), 2)
+        team_running_def[abbr] = round(float(p_meta.get("Def_Rtg_Base", 114.5)), 2)
+
+    seed_rows: List[Dict[str, Any]] = []
+    for _, row in eval_df.iterrows():
+        fecha_str = str(row.get("date", "2026-11-04")).strip()
+        h_abbr = str(row.get("home_abbr", "HOME")).strip().upper()
+        a_abbr = str(row.get("away_abbr", "AWAY")).strip().upper()
+        partido_str = f"{a_abbr} @ {h_abbr}"
+
+        real_h = float(row.get("actual_home_score", 110.0))
+        real_a = float(row.get("actual_away_score", 108.0))
+        marcador_real_str = f"{int(round(real_a))}-{int(round(real_h))}"
+
+        proj_margin_home = round(float(row.get("projected_margin", 0.0)), 2)
+        proy_spread_home = round(-proj_margin_home, 2)
+        real_margin_home = round(float(row.get("actual_margin", real_h - real_a)), 2)
+        error_spread = round(float(row.get("margin_error", real_margin_home - proj_margin_home)), 2)
+
+        proy_total = round(float(row.get("projected_total", 224.5)), 2)
+        real_total = round(float(row.get("actual_total", real_h + real_a)), 2)
+        error_total = round(float(row.get("total_error", real_total - proy_total)), 2)
+
+        delta_net_home = round(ELO_BAYES_K * error_spread, 3)
+        delta_off_home = round((delta_net_home / 2.0) + (0.015 * error_total), 2)
+        delta_def_home = round(-(delta_net_home / 2.0) + (0.015 * error_total), 2)
+
+        delta_net_away = round(-delta_net_home, 3)
+        delta_off_away = round((delta_net_away / 2.0) + (0.015 * error_total), 2)
+        delta_def_away = round(-(delta_net_away / 2.0) + (0.015 * error_total), 2)
+
+        # Equipo Visitante
+        a_off_prev = round(team_running_off.get(a_abbr, 114.0), 2)
+        a_def_prev = round(team_running_def.get(a_abbr, 114.0), 2)
+        a_off_new = round(a_off_prev + delta_off_away, 2)
+        a_def_new = round(a_def_prev + delta_def_away, 2)
+        team_running_off[a_abbr] = a_off_new
+        team_running_def[a_abbr] = a_def_new
+
+        seed_rows.append(
+            {
+                "Fecha": fecha_str,
+                "Partido": partido_str,
+                "Marcador_Real": marcador_real_str,
+                "Proy_Spread": proy_spread_home,
+                "Error_Spread": error_spread,
+                "Proy_Total": proy_total,
+                "Error_Total": error_total,
+                "Equipo": a_abbr,
+                "Off_Rtg_Prev": a_off_prev,
+                "Off_Rtg_New": a_off_new,
+                "Delta_Off": round(a_off_new - a_off_prev, 2),
+                "Def_Rtg_Prev": a_def_prev,
+                "Def_Rtg_New": a_def_new,
+                "Delta_Def": round(a_def_new - a_def_prev, 2),
+            }
+        )
+
+        # Equipo Local
+        h_off_prev = round(team_running_off.get(h_abbr, 114.5), 2)
+        h_def_prev = round(team_running_def.get(h_abbr, 114.5), 2)
+        h_off_new = round(h_off_prev + delta_off_home, 2)
+        h_def_new = round(h_def_prev + delta_def_home, 2)
+        team_running_off[h_abbr] = h_off_new
+        team_running_def[h_abbr] = h_def_new
+
+        seed_rows.append(
+            {
+                "Fecha": fecha_str,
+                "Partido": partido_str,
+                "Marcador_Real": marcador_real_str,
+                "Proy_Spread": proy_spread_home,
+                "Error_Spread": error_spread,
+                "Proy_Total": proy_total,
+                "Error_Total": error_total,
+                "Equipo": h_abbr,
+                "Off_Rtg_Prev": h_off_prev,
+                "Off_Rtg_New": h_off_new,
+                "Delta_Off": round(h_off_new - h_off_prev, 2),
+                "Def_Rtg_Prev": h_def_prev,
+                "Def_Rtg_New": h_def_new,
+                "Delta_Def": round(h_def_new - h_def_prev, 2),
+            }
+        )
+
+    return pd.DataFrame(seed_rows, columns=AUDIT_LOG_COLS)
+
+
+def _leer_hoja_audit_log_zip_fallback(xlsx_path: Path) -> Optional[pd.DataFrame]:
+    """
+    Lee la pestaña `Audit_Log` directamente desde el XML interno de un archivo `.xlsx`
+    usando `zipfile` + `xml.etree.ElementTree` como respaldo cuando `openpyxl` no está activo.
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    if not xlsx_path.exists():
+        return None
+    try:
+        with zipfile.ZipFile(xlsx_path, "r") as z:
+            if "xl/workbook.xml" not in z.namelist():
+                return None
+            wb_root = ET.fromstring(z.read("xl/workbook.xml"))
+            rels_root = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+            rid_to_target = {}
+            for rel in rels_root.iter():
+                if rel.tag.endswith("Relationship"):
+                    rid_to_target[rel.attrib.get("Id", "")] = rel.attrib.get("Target", "")
+
+            target_sheet_xml = None
+            for sh in wb_root.iter():
+                if sh.tag.endswith("sheet") and sh.attrib.get("name") == AUDIT_LOG_SHEET_NAME:
+                    for k, v in sh.attrib.items():
+                        if k.endswith("id"):
+                            t_rel = rid_to_target.get(v, "")
+                            target_sheet_xml = t_rel if t_rel.startswith("xl/") else f"xl/{t_rel.lstrip('/')}"
+                            break
+            if not target_sheet_xml or target_sheet_xml not in z.namelist():
+                return None
+
+            shared_strings: List[str] = []
+            if "xl/sharedStrings.xml" in z.namelist():
+                ss_root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                for si in ss_root.iter():
+                    if si.tag.endswith("si"):
+                        texts = [t.text or "" for t in si.iter() if t.tag.endswith("t")]
+                        shared_strings.append("".join(texts))
+
+            ws_root = ET.fromstring(z.read(target_sheet_xml))
+            parsed_rows: List[List[Any]] = []
+            for row_el in ws_root.iter():
+                if row_el.tag.endswith("row"):
+                    vals: List[Any] = []
+                    for c_el in row_el:
+                        if not c_el.tag.endswith("c"):
+                            continue
+                        c_type = c_el.attrib.get("t", "")
+                        val_text = ""
+                        if c_type == "inlineStr":
+                            texts = [t.text or "" for t in c_el.iter() if t.tag.endswith("t")]
+                            val_text = "".join(texts)
+                        else:
+                            for v_el in c_el:
+                                if v_el.tag.endswith("v") and v_el.text is not None:
+                                    val_text = v_el.text
+                                    break
+                            if c_type == "s" and val_text.isdigit():
+                                idx_s = int(val_text)
+                                if 0 <= idx_s < len(shared_strings):
+                                    val_text = shared_strings[idx_s]
+                        vals.append(val_text)
+                    if vals:
+                        parsed_rows.append(vals)
+
+            if len(parsed_rows) < 2:
+                return pd.DataFrame(columns=AUDIT_LOG_COLS)
+            headers = [str(h).strip() for h in parsed_rows[0]]
+            data_dicts = []
+            for r_vals in parsed_rows[1:]:
+                row_d = {}
+                for i, h_name in enumerate(headers):
+                    raw_v = r_vals[i] if i < len(r_vals) else ""
+                    if h_name in (
+                        "Proy_Spread", "Error_Spread", "Proy_Total", "Error_Total",
+                        "Off_Rtg_Prev", "Off_Rtg_New", "Delta_Off",
+                        "Def_Rtg_Prev", "Def_Rtg_New", "Delta_Def",
+                    ):
+                        try:
+                            row_d[h_name] = float(raw_v)
+                        except (TypeError, ValueError):
+                            row_d[h_name] = 0.0
+                    else:
+                        row_d[h_name] = str(raw_v)
+                data_dicts.append(row_d)
+            df_out = pd.DataFrame(data_dicts)
+            for col in AUDIT_LOG_COLS:
+                if col not in df_out.columns:
+                    df_out[col] = 0.0 if "Rtg" in col or "Delta" in col or "Error" in col or "Proy" in col else ""
+            return df_out[AUDIT_LOG_COLS]
+    except Exception:
+        return None
+
+
+def _escribir_hoja_audit_log_zip_fallback(xlsx_path: Path, df_audit: pd.DataFrame) -> bool:
+    """
+    Inyecta o actualiza la pestaña `Audit_Log` dentro de `nba_rosters_plantilla.xlsx`
+    usando únicamente la librería estándar (`zipfile` + `xml.etree.ElementTree`) cuando
+    `openpyxl` no está disponible en el intérprete actual.
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+    from xml.sax.saxutils import escape as _xml_escape
+
+    if not xlsx_path.exists():
+        return False
+
+    def _col_letter(col_idx_1: int) -> str:
+        res_str = ""
+        n = col_idx_1
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            res_str = chr(65 + rem) + res_str
+        return res_str
+
+    cols = list(AUDIT_LOG_COLS)
+    rows_xml: List[str] = []
+
+    # Fila 1: Cabeceras
+    header_cells = []
+    for c_i, c_name in enumerate(cols, start=1):
+        ref = f"{_col_letter(c_i)}1"
+        header_cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{_xml_escape(str(c_name))}</t></is></c>')
+    rows_xml.append(f'<row r="1">{"".join(header_cells)}</row>')
+
+    # Filas de datos
+    for r_i, (_, row) in enumerate(df_audit.iterrows(), start=2):
+        cell_xmls = []
+        for c_i, c_name in enumerate(cols, start=1):
+            ref = f"{_col_letter(c_i)}{r_i}"
+            val = row.get(c_name, "")
+            if c_name in (
+                "Proy_Spread", "Error_Spread", "Proy_Total", "Error_Total",
+                "Off_Rtg_Prev", "Off_Rtg_New", "Delta_Off",
+                "Def_Rtg_Prev", "Def_Rtg_New", "Delta_Def",
+            ):
+                try:
+                    num_v = float(val)
+                    cell_xmls.append(f'<c r="{ref}"><v>{num_v}</v></c>')
+                except (TypeError, ValueError):
+                    cell_xmls.append(f'<c r="{ref}"><v>0.0</v></c>')
+            else:
+                cell_xmls.append(f'<c r="{ref}" t="inlineStr"><is><t>{_xml_escape(str(val))}</t></is></c>')
+        rows_xml.append(f'<row r="{r_i}">{"".join(cell_xmls)}</row>')
+
+    sheet_xml_str = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData>{"".join(rows_xml)}</sheetData>'
+        "</worksheet>"
+    )
+
+    try:
+        with zipfile.ZipFile(xlsx_path, "r") as zin:
+            entries = {name: zin.read(name) for name in zin.namelist()}
+
+        wb_xml = entries["xl/workbook.xml"].decode("utf-8")
+        rels_xml = entries["xl/_rels/workbook.xml.rels"].decode("utf-8")
+        ct_xml = entries["[Content_Types].xml"].decode("utf-8")
+
+        target_sheet_entry = "xl/worksheets/sheet_audit_log.xml"
+        rel_id = "rIdAuditLog99"
+
+        if f'name="{AUDIT_LOG_SHEET_NAME}"' not in wb_xml:
+            sheet_tag = (
+                f'<sheet name="{AUDIT_LOG_SHEET_NAME}" sheetId="99" r:id="{rel_id}" '
+                f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>'
+            )
+            if 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' in wb_xml:
+                sheet_tag = f'<sheet name="{AUDIT_LOG_SHEET_NAME}" sheetId="99" r:id="{rel_id}"/>'
+            wb_xml = wb_xml.replace("</sheets>", f"{sheet_tag}</sheets>")
+            entries["xl/workbook.xml"] = wb_xml.encode("utf-8")
+
+        if f'Id="{rel_id}"' not in rels_xml:
+            rel_tag = (
+                f'<Relationship Id="{rel_id}" '
+                f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                f'Target="worksheets/sheet_audit_log.xml"/>'
+            )
+            rels_xml = rels_xml.replace("</Relationships>", f"{rel_tag}</Relationships>")
+            entries["xl/_rels/workbook.xml.rels"] = rels_xml.encode("utf-8")
+
+        if "/xl/worksheets/sheet_audit_log.xml" not in ct_xml:
+            override_tag = (
+                '<Override PartName="/xl/worksheets/sheet_audit_log.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            )
+            ct_xml = ct_xml.replace("</Types>", f"{override_tag}</Types>")
+            entries["[Content_Types].xml"] = ct_xml.encode("utf-8")
+
+        entries[target_sheet_entry] = sheet_xml_str.encode("utf-8")
+
+        with zipfile.ZipFile(xlsx_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for k, v in entries.items():
+                zout.writestr(k, v)
+        return True
+    except Exception:
+        return False
+
+
+def cargar_audit_log_df(excel_source: Optional[Any] = None) -> pd.DataFrame:
+    """
+    Carga la pestaña `Audit_Log` desde el Excel maestro (`nba_rosters_plantilla.xlsx`),
+    combinándola con `data/audit_log.csv` si existe. Si ambos están vacíos, inicializa
+    el historial con los partidos ya evaluados en `data/prediction_history.csv`.
+    """
+    frames: List[pd.DataFrame] = []
+
+    if excel_source is not None:
+        try:
+            if isinstance(excel_source, (bytes, bytearray)):
+                df_src = pd.read_excel(io.BytesIO(excel_source), sheet_name=AUDIT_LOG_SHEET_NAME)
+            else:
+                df_src = pd.read_excel(excel_source, sheet_name=AUDIT_LOG_SHEET_NAME)
+            if isinstance(df_src, pd.DataFrame) and not df_src.empty:
+                frames.append(df_src)
+        except Exception:
+            pass
+
+    xlsx_candidates = [
+        Path(DEFAULT_ROSTERS_EXCEL_FILENAME),
+        Path(__file__).resolve().parent / DEFAULT_ROSTERS_EXCEL_FILENAME,
+    ]
+    for x_path in xlsx_candidates:
+        if x_path.exists():
+            try:
+                df_x = pd.read_excel(x_path, sheet_name=AUDIT_LOG_SHEET_NAME)
+                if isinstance(df_x, pd.DataFrame) and not df_x.empty:
+                    frames.append(df_x)
+                    break
+            except Exception:
+                df_zip = _leer_hoja_audit_log_zip_fallback(x_path)
+                if df_zip is not None and not df_zip.empty:
+                    frames.append(df_zip)
+                    break
+
+    csv_candidates = [
+        Path(AUDIT_LOG_CSV_FILENAME),
+        Path(__file__).resolve().parent / AUDIT_LOG_CSV_FILENAME,
+    ]
+    for c_path in csv_candidates:
+        if c_path.exists():
+            try:
+                df_c = pd.read_csv(c_path)
+                if isinstance(df_c, pd.DataFrame) and not df_c.empty:
+                    frames.append(df_c)
+                    break
+            except Exception:
+                continue
+
+    if not frames:
+        df_seed = _generar_audit_log_semilla_desde_historial()
+        if not df_seed.empty:
+            frames.append(df_seed)
+
+    if not frames:
+        return pd.DataFrame(columns=AUDIT_LOG_COLS)
+
+    combined = pd.concat(frames, ignore_index=True)
+    for col in AUDIT_LOG_COLS:
+        if col not in combined.columns:
+            combined[col] = 0.0 if ("Rtg" in col or "Delta" in col or "Error" in col or "Proy" in col) else ""
+    combined = combined[AUDIT_LOG_COLS].copy()
+    combined = combined.drop_duplicates(subset=["Fecha", "Partido", "Equipo"], keep="last").reset_index(drop=True)
+    return combined
+
+
+def append_audit_log_to_master_excel(
+    nuevas_filas: List[Dict[str, Any]],
+    excel_path: Optional[Any] = None,
+) -> pd.DataFrame:
+    """
+    Agrega filas nuevas (modo append, sin sobrescribir el historial previo) en la pestaña
+    `Audit_Log` del Excel maestro (`nba_rosters_plantilla.xlsx`) y sincroniza `data/audit_log.csv`.
+    Columnas exactas:
+      'Fecha', 'Partido', 'Marcador_Real', 'Proy_Spread', 'Error_Spread',
+      'Proy_Total', 'Error_Total', 'Equipo', 'Off_Rtg_Prev', 'Off_Rtg_New',
+      'Delta_Off', 'Def_Rtg_Prev', 'Def_Rtg_New', 'Delta_Def'
+    """
+    existing_df = cargar_audit_log_df(excel_source=excel_path)
+    if nuevas_filas:
+        df_new = pd.DataFrame(nuevas_filas)
+        for col in AUDIT_LOG_COLS:
+            if col not in df_new.columns:
+                df_new[col] = 0.0 if ("Rtg" in col or "Delta" in col or "Error" in col or "Proy" in col) else ""
+        df_new = df_new[AUDIT_LOG_COLS].copy()
+        merged_df = pd.concat([existing_df, df_new], ignore_index=True)
+    else:
+        merged_df = existing_df.copy()
+
+    if not merged_df.empty:
+        merged_df = (
+            merged_df[AUDIT_LOG_COLS]
+            .drop_duplicates(subset=["Fecha", "Partido", "Equipo"], keep="last")
+            .reset_index(drop=True)
+        )
+    else:
+        merged_df = pd.DataFrame(columns=AUDIT_LOG_COLS)
+
+    # 1. Guardar respaldo sincronizado en data/audit_log.csv
+    target_csv = Path(__file__).resolve().parent / AUDIT_LOG_CSV_FILENAME
+    try:
+        target_csv.parent.mkdir(parents=True, exist_ok=True)
+        merged_df.to_csv(target_csv, index=False, encoding="utf-8")
+    except Exception:
+        pass
+
+    # 2. Actualizar pestaña 'Audit_Log' en nba_rosters_plantilla.xlsx
+    target_xlsx = (
+        Path(excel_path)
+        if excel_path is not None
+        else (Path(__file__).resolve().parent / DEFAULT_ROSTERS_EXCEL_FILENAME)
+    )
+    if not target_xlsx.exists():
+        alt_xlsx = Path(DEFAULT_ROSTERS_EXCEL_FILENAME)
+        if alt_xlsx.exists():
+            target_xlsx = alt_xlsx
+
+    if target_xlsx.exists():
+        updated_with_openpyxl = False
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(target_xlsx)
+            if AUDIT_LOG_SHEET_NAME in wb.sheetnames:
+                ws_aud = wb[AUDIT_LOG_SHEET_NAME]
+                ws_aud.delete_rows(1, ws_aud.max_row + 1)
+            else:
+                ws_aud = wb.create_sheet(title=AUDIT_LOG_SHEET_NAME)
+
+            ws_aud.views.sheetView[0].showGridLines = True
+            ws_aud.freeze_panes = "A2"
+            ws_aud.append(list(AUDIT_LOG_COLS))
+
+            if PatternFill is not None and Font is not None:
+                h_fill = PatternFill(start_color="0D1117", end_color="0D1117", fill_type="solid")
+                h_font = Font(name="Calibri", size=11, bold=True, color="00FFCC")
+                for col_i in range(1, len(AUDIT_LOG_COLS) + 1):
+                    c_hdr = ws_aud.cell(row=1, column=col_i)
+                    c_hdr.fill = h_fill
+                    c_hdr.font = h_font
+
+            for _, r_data in merged_df.iterrows():
+                ws_aud.append([r_data[c] for c in AUDIT_LOG_COLS])
+
+            wb.save(target_xlsx)
+            updated_with_openpyxl = True
+        except Exception:
+            updated_with_openpyxl = False
+
+        if not updated_with_openpyxl:
+            _escribir_hoja_audit_log_zip_fallback(target_xlsx, merged_df)
+
+    return merged_df
