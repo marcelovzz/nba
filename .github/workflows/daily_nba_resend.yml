@@ -29,7 +29,7 @@ jobs:
 
       - name: Install WeasyPrint system dependencies (Ubuntu)
         run: |
-          sudo apt-get update && sudo apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
+          sudo apt-get update && sudo apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libgdk-pixbuf-xlib-2.0-0 libffi-dev shared-mime-info
 
       - name: Install dependencies
         run: |
