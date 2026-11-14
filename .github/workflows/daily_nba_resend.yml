@@ -9,8 +9,48 @@ on:
   workflow_dispatch:
 
 jobs:
+  calibrate-and-learn:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 10 * * *'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas numpy openpyxl beautifulsoup4
+
+      - name: Run Post-Game Bayesian/Elo Calibration
+        run: python calibrate_nba.py
+
+      - name: Auto-commit and push learned ratings, Audit_Log master Excel and prediction history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/team_ratings_state.json data/prediction_history.csv data/audit_log.csv nba_rosters_plantilla.xlsx || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: autocalibracion diaria de ratings nba post-jornada y Audit_Log [skip ci]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          else
+            echo "Sin cambios pendientes en data/team_ratings_state.json, data/prediction_history.csv ni nba_rosters_plantilla.xlsx"
+          fi
+
   send-daily-nba-report:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 22 * * *'
+    needs: calibrate-and-learn
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '30 22 * * *')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -49,43 +89,6 @@ jobs:
           git add data/prediction_history.csv data/team_ratings_state.json || true
           if ! git diff --cached --quiet; then
             git commit -m "chore: guardar proyecciones diarias pendientes nba [skip ci]"
+            git pull --rebase origin main
             git push origin HEAD:main
-          fi
-
-  calibrate-and-learn:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 10 * * *'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas numpy openpyxl beautifulsoup4
-
-      - name: Run Post-Game Bayesian/Elo Calibration
-        run: python calibrate_nba.py
-
-      - name: Auto-commit and push learned ratings, Audit_Log master Excel and prediction history
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/team_ratings_state.json data/prediction_history.csv data/audit_log.csv nba_rosters_plantilla.xlsx || true
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: autocalibracion diaria de ratings nba post-jornada y Audit_Log [skip ci]"
-            git push origin HEAD:main
-          else
-            echo "Sin cambios pendientes en data/team_ratings_state.json, data/prediction_history.csv ni nba_rosters_plantilla.xlsx"
           fi
