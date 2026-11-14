@@ -1,7 +1,7 @@
 {
   "meta": {
     "k_factor": 0.06,
-    "updated_at": "2026-11-14T05:43:58Z",
+    "updated_at": "2026-11-14T05:48:39Z",
     "description": "Estado autocalibrado de Net Ratings NBA (Feedback Loop Elo/Bayesiano K=0.06)",
     "last_calibrated_date": "2026-11-13"
   },
