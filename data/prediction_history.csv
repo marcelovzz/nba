@@ -74,7 +74,7 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909301,2026-11-13,Houston Rockets,Utah Jazz,HOU,UTA,120.51,107.29,13.22,227.79,evaluated,125.0,118.0,7.0,243.0,-6.22,15.21,2026-11-14T05:41:52Z
 401909302,2026-11-13,San Antonio Spurs,Golden State Warriors,SAS,GSW,116.92,116.26,0.66,233.18,evaluated,123.0,85.0,38.0,208.0,37.34,-25.18,2026-11-14T05:41:52Z
 401909303,2026-11-13,Sacramento Kings,Portland Trail Blazers,SAC,POR,116.64,110.11,6.53,226.75,evaluated,107.0,120.0,-13.0,227.0,-19.53,0.25,2026-11-14T05:41:52Z
-401909304,2026-11-13,LA Clippers,Oklahoma City Thunder,LAC,OKC,115.55,117.79,-2.24,233.35,pending,,,,,,,
+401909304,2026-11-13,LA Clippers,Oklahoma City Thunder,LAC,OKC,115.55,117.79,-2.24,233.35,evaluated,113.0,112.0,1.0,225.0,3.24,-8.35,2026-11-14T16:28:19Z
 401909980,2026-11-14,New Orleans Pelicans,Denver Nuggets,NOP,DEN,107.12,119.2,-12.08,226.32,pending,,,,,,,
 401909981,2026-11-14,Cleveland Cavaliers,Dallas Mavericks,CLE,DAL,123.0,119.05,3.96,242.05,pending,,,,,,,
 401909982,2026-11-14,Miami Heat,Detroit Pistons,MIA,DET,114.33,106.21,8.12,220.54,pending,,,,,,,
