@@ -75,3 +75,8 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909302,2026-11-13,San Antonio Spurs,Golden State Warriors,SAS,GSW,116.92,116.26,0.66,233.18,pending,,,,,,,
 401909303,2026-11-13,Sacramento Kings,Portland Trail Blazers,SAC,POR,116.64,110.11,6.53,226.75,pending,,,,,,,
 401909304,2026-11-13,LA Clippers,Oklahoma City Thunder,LAC,OKC,115.55,117.79,-2.24,233.35,pending,,,,,,,
+401909980,2026-11-14,New Orleans Pelicans,Denver Nuggets,NOP,DEN,106.39,118.87,-12.48,225.26,pending,,,,,,,
+401909981,2026-11-14,Cleveland Cavaliers,Dallas Mavericks,CLE,DAL,123.31,118.64,4.67,241.96,pending,,,,,,,
+401909982,2026-11-14,Miami Heat,Detroit Pistons,MIA,DET,114.51,106.56,7.95,221.07,pending,,,,,,,
+401909983,2026-11-14,Memphis Grizzlies,Brooklyn Nets,MEM,BKN,117.5,110.61,6.88,228.11,pending,,,,,,,
+401909984,2026-11-14,Minnesota Timberwolves,Chicago Bulls,MIN,CHI,119.65,108.54,11.11,228.19,pending,,,,,,,
