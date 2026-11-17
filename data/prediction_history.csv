@@ -97,3 +97,8 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909999,2026-11-16,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.25,106.32,7.93,220.57,pending,,,,,,,
 401910000,2026-11-16,New Orleans Pelicans,Golden State Warriors,NOP,GSW,108.98,115.74,-6.76,224.72,pending,,,,,,,
 401910001,2026-11-16,Denver Nuggets,Phoenix Suns,DEN,PHX,120.28,112.62,7.65,232.9,pending,,,,,,,
+401910002,2026-11-17,Toronto Raptors,New York Knicks,TOR,NYK,110.34,118.19,-7.85,228.53,pending,,,,,,,
+401910003,2026-11-17,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.05,106.27,7.78,220.32,pending,,,,,,,
+401910004,2026-11-17,San Antonio Spurs,Detroit Pistons,SAS,DET,119.25,107.92,11.33,227.18,pending,,,,,,,
+401910006,2026-11-17,LA Clippers,Utah Jazz,LAC,UTA,116.97,106.43,10.54,223.4,pending,,,,,,,
+401910005,2026-11-17,Los Angeles Lakers,Charlotte Hornets,LAL,CHA,119.29,107.35,11.94,226.64,pending,,,,,,,
