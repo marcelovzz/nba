@@ -89,14 +89,14 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909991,2026-11-15,Washington Wizards,Houston Rockets,WAS,HOU,108.7,116.0,-7.3,224.7,evaluated,119.0,147.0,-28.0,266.0,-20.7,41.3,2026-11-16T20:10:51Z
 401909992,2026-11-15,Milwaukee Bucks,Atlanta Hawks,MIL,ATL,119.45,116.68,2.77,236.13,evaluated,106.0,113.0,-7.0,219.0,-9.77,-17.13,2026-11-16T20:10:51Z
 401909993,2026-11-15,Sacramento Kings,Oklahoma City Thunder,SAC,OKC,116.61,122.17,-5.56,238.78,evaluated,103.0,125.0,-22.0,228.0,-16.44,-10.78,2026-11-16T20:10:51Z
-401909994,2026-11-16,Boston Celtics,Orlando Magic,BOS,ORL,121.56,106.96,14.61,228.52,pending,,,,,,,
-401909995,2026-11-16,Cleveland Cavaliers,Chicago Bulls,CLE,CHI,123.64,112.36,11.28,236.0,pending,,,,,,,
-401909996,2026-11-16,Washington Wizards,Memphis Grizzlies,WAS,MEM,110.27,120.02,-9.75,230.3,pending,,,,,,,
-401909997,2026-11-16,Brooklyn Nets,Philadelphia 76ers,BKN,PHI,109.22,113.76,-4.54,222.98,pending,,,,,,,
-401909998,2026-11-16,Miami Heat,Houston Rockets,MIA,HOU,112.34,111.6,0.74,223.93,pending,,,,,,,
-401909999,2026-11-16,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.25,106.32,7.93,220.57,pending,,,,,,,
-401910000,2026-11-16,New Orleans Pelicans,Golden State Warriors,NOP,GSW,108.98,115.74,-6.76,224.72,pending,,,,,,,
-401910001,2026-11-16,Denver Nuggets,Phoenix Suns,DEN,PHX,120.28,112.62,7.65,232.9,pending,,,,,,,
+401909994,2026-11-16,Boston Celtics,Orlando Magic,BOS,ORL,121.56,106.96,14.61,228.52,evaluated,105.0,115.0,-10.0,220.0,-24.61,-8.52,2026-11-17T19:00:57Z
+401909995,2026-11-16,Cleveland Cavaliers,Chicago Bulls,CLE,CHI,123.64,112.36,11.28,236.0,evaluated,126.0,115.0,11.0,241.0,-0.28,5.0,2026-11-17T19:00:57Z
+401909996,2026-11-16,Washington Wizards,Memphis Grizzlies,WAS,MEM,110.27,120.02,-9.75,230.3,evaluated,120.0,136.0,-16.0,256.0,-6.25,25.7,2026-11-17T19:00:57Z
+401909997,2026-11-16,Brooklyn Nets,Philadelphia 76ers,BKN,PHI,109.22,113.76,-4.54,222.98,evaluated,123.0,135.0,-12.0,258.0,-7.46,35.02,2026-11-17T19:00:57Z
+401909998,2026-11-16,Miami Heat,Houston Rockets,MIA,HOU,112.34,111.6,0.74,223.93,evaluated,128.0,110.0,18.0,238.0,17.26,14.07,2026-11-17T19:00:57Z
+401909999,2026-11-16,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.25,106.32,7.93,220.57,evaluated,106.0,98.0,8.0,204.0,0.07,-16.57,2026-11-17T19:00:57Z
+401910000,2026-11-16,New Orleans Pelicans,Golden State Warriors,NOP,GSW,108.98,115.74,-6.76,224.72,evaluated,115.0,94.0,21.0,209.0,27.76,-15.72,2026-11-17T19:00:57Z
+401910001,2026-11-16,Denver Nuggets,Phoenix Suns,DEN,PHX,120.28,112.62,7.65,232.9,evaluated,105.0,117.0,-12.0,222.0,-19.65,-10.9,2026-11-17T19:00:57Z
 401910002,2026-11-17,Toronto Raptors,New York Knicks,TOR,NYK,110.34,118.19,-7.85,228.53,pending,,,,,,,
 401910003,2026-11-17,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.05,106.27,7.78,220.32,pending,,,,,,,
 401910004,2026-11-17,San Antonio Spurs,Detroit Pistons,SAS,DET,119.25,107.92,11.33,227.18,pending,,,,,,,
