@@ -97,11 +97,11 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909999,2026-11-16,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.25,106.32,7.93,220.57,evaluated,106.0,98.0,8.0,204.0,0.07,-16.57,2026-11-17T19:00:57Z
 401910000,2026-11-16,New Orleans Pelicans,Golden State Warriors,NOP,GSW,108.98,115.74,-6.76,224.72,evaluated,115.0,94.0,21.0,209.0,27.76,-15.72,2026-11-17T19:00:57Z
 401910001,2026-11-16,Denver Nuggets,Phoenix Suns,DEN,PHX,120.28,112.62,7.65,232.9,evaluated,105.0,117.0,-12.0,222.0,-19.65,-10.9,2026-11-17T19:00:57Z
-401910002,2026-11-17,Toronto Raptors,New York Knicks,TOR,NYK,110.34,118.19,-7.85,228.53,pending,,,,,,,
-401910003,2026-11-17,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.05,106.27,7.78,220.32,pending,,,,,,,
-401910004,2026-11-17,San Antonio Spurs,Detroit Pistons,SAS,DET,119.25,107.92,11.33,227.18,pending,,,,,,,
-401910006,2026-11-17,LA Clippers,Utah Jazz,LAC,UTA,116.97,106.43,10.54,223.4,pending,,,,,,,
-401910005,2026-11-17,Los Angeles Lakers,Charlotte Hornets,LAL,CHA,119.29,107.35,11.94,226.64,pending,,,,,,,
+401910002,2026-11-17,Toronto Raptors,New York Knicks,TOR,NYK,110.34,118.19,-7.85,228.53,evaluated,102.0,111.0,-9.0,213.0,-1.15,-15.53,2026-11-18T18:45:03Z
+401910003,2026-11-17,Minnesota Timberwolves,Portland Trail Blazers,MIN,POR,114.05,106.27,7.78,220.32,evaluated,106.0,105.0,1.0,211.0,-6.78,-9.32,2026-11-18T18:45:03Z
+401910004,2026-11-17,San Antonio Spurs,Detroit Pistons,SAS,DET,119.25,107.92,11.33,227.18,evaluated,93.0,105.0,-12.0,198.0,-23.33,-29.18,2026-11-18T18:45:03Z
+401910006,2026-11-17,LA Clippers,Utah Jazz,LAC,UTA,116.97,106.43,10.54,223.4,evaluated,107.0,132.0,-25.0,239.0,-35.54,15.6,2026-11-18T18:45:03Z
+401910005,2026-11-17,Los Angeles Lakers,Charlotte Hornets,LAL,CHA,119.29,107.35,11.94,226.64,evaluated,118.0,114.0,4.0,232.0,-7.94,5.36,2026-11-18T18:45:03Z
 401910007,2026-11-18,Cleveland Cavaliers,Memphis Grizzlies,CLE,MEM,123.05,117.44,5.61,240.49,pending,,,,,,,
 401910008,2026-11-18,Indiana Pacers,Houston Rockets,IND,HOU,119.33,115.55,3.78,234.88,pending,,,,,,,
 401910009,2026-11-18,Miami Heat,Milwaukee Bucks,MIA,MIL,115.64,110.84,4.8,226.49,pending,,,,,,,
