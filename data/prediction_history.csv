@@ -114,10 +114,10 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401910015,2026-11-18,Denver Nuggets,Boston Celtics,DEN,BOS,117.64,120.16,-2.52,237.8,evaluated,105.0,101.0,4.0,206.0,6.52,-31.8,2026-11-19T18:55:48Z
 401910017,2026-11-18,Los Angeles Lakers,Utah Jazz,LAL,UTA,120.02,107.74,12.28,227.77,evaluated,97.0,109.0,-12.0,206.0,-24.28,-21.77,2026-11-19T18:55:48Z
 401910018,2026-11-18,Sacramento Kings,Phoenix Suns,SAC,PHX,115.54,117.19,-1.64,232.73,evaluated,107.0,128.0,-21.0,235.0,-19.36,2.27,2026-11-19T18:55:48Z
-401910019,2026-11-19,Memphis Grizzlies,Golden State Warriors,MEM,GSW,119.04,114.36,4.68,233.4,pending,,,,,,,
-401910020,2026-11-19,Milwaukee Bucks,Portland Trail Blazers,MIL,POR,115.46,111.52,3.94,226.98,pending,,,,,,,
-401910021,2026-11-19,Minnesota Timberwolves,New York Knicks,MIN,NYK,112.3,113.91,-1.61,226.21,pending,,,,,,,
-401910022,2026-11-19,San Antonio Spurs,LA Clippers,SAS,LAC,116.47,111.56,4.91,228.03,pending,,,,,,,
+401910019,2026-11-19,Memphis Grizzlies,Golden State Warriors,MEM,GSW,119.04,114.36,4.68,233.4,evaluated,126.0,98.0,28.0,224.0,23.32,-9.4,2026-11-20T18:27:06Z
+401910020,2026-11-19,Milwaukee Bucks,Portland Trail Blazers,MIL,POR,115.46,111.52,3.94,226.98,evaluated,114.0,124.0,-10.0,238.0,-13.94,11.02,2026-11-20T18:27:06Z
+401910021,2026-11-19,Minnesota Timberwolves,New York Knicks,MIN,NYK,112.3,113.91,-1.61,226.21,evaluated,99.0,102.0,-3.0,201.0,-1.39,-25.21,2026-11-20T18:27:06Z
+401910022,2026-11-19,San Antonio Spurs,LA Clippers,SAS,LAC,116.47,111.56,4.91,228.03,evaluated,124.0,112.0,12.0,236.0,7.09,7.97,2026-11-20T18:27:06Z
 401909305,2026-11-20,Atlanta Hawks,Charlotte Hornets,ATL,CHA,118.68,110.45,8.23,229.13,pending,,,,,,,
 401909306,2026-11-20,Brooklyn Nets,Orlando Magic,BKN,ORL,105.83,110.43,-4.6,216.25,pending,,,,,,,
 401909307,2026-11-20,Cleveland Cavaliers,Indiana Pacers,CLE,IND,123.7,118.32,5.38,242.01,pending,,,,,,,
