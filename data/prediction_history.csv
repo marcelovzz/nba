@@ -133,13 +133,13 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401910026,2026-11-21,Minnesota Timberwolves,Memphis Grizzlies,MIN,MEM,115.23,114.19,1.04,229.41,evaluated,104.0,95.0,9.0,199.0,7.96,-30.41,2026-11-22T17:42:50Z
 401910027,2026-11-21,San Antonio Spurs,New Orleans Pelicans,SAS,NOP,118.45,107.14,11.31,225.59,evaluated,114.0,91.0,23.0,205.0,11.69,-20.59,2026-11-22T17:42:50Z
 401910028,2026-11-21,Sacramento Kings,Boston Celtics,SAC,BOS,113.42,124.2,-10.78,237.62,evaluated,97.0,96.0,1.0,193.0,11.78,-44.62,2026-11-22T17:42:50Z
-401910029,2026-11-22,Atlanta Hawks,Detroit Pistons,ATL,DET,119.34,111.34,8.0,230.67,pending,,,,,,,
-401910030,2026-11-22,Miami Heat,Oklahoma City Thunder,MIA,OKC,114.96,116.38,-1.42,231.34,pending,,,,,,,
-401910031,2026-11-22,Washington Wizards,Orlando Magic,WAS,ORL,106.4,112.96,-6.55,219.36,pending,,,,,,,
-401910032,2026-11-22,Chicago Bulls,Denver Nuggets,CHI,DEN,112.79,118.88,-6.09,231.66,pending,,,,,,,
-401910033,2026-11-22,Utah Jazz,Dallas Mavericks,UTA,DAL,113.52,119.57,-6.05,233.09,pending,,,,,,,
-401910034,2026-11-22,New York Knicks,Indiana Pacers,NYK,IND,121.88,115.45,6.43,237.34,pending,,,,,,,
-401910035,2026-11-22,Golden State Warriors,Boston Celtics,GSW,BOS,113.16,122.1,-8.94,235.26,pending,,,,,,,
+401910029,2026-11-22,Atlanta Hawks,Detroit Pistons,ATL,DET,119.34,111.34,8.0,230.67,evaluated,107.0,97.0,10.0,204.0,2.0,-26.67,2026-11-23T21:57:49Z
+401910030,2026-11-22,Miami Heat,Oklahoma City Thunder,MIA,OKC,114.96,116.38,-1.42,231.34,evaluated,123.0,113.0,10.0,236.0,11.42,4.66,2026-11-23T21:57:49Z
+401910031,2026-11-22,Washington Wizards,Orlando Magic,WAS,ORL,106.4,112.96,-6.55,219.36,evaluated,116.0,96.0,20.0,212.0,26.55,-7.36,2026-11-23T21:57:49Z
+401910032,2026-11-22,Chicago Bulls,Denver Nuggets,CHI,DEN,112.79,118.88,-6.09,231.66,evaluated,145.0,151.0,-6.0,296.0,0.09,64.34,2026-11-23T21:57:49Z
+401910033,2026-11-22,Utah Jazz,Dallas Mavericks,UTA,DAL,113.52,119.57,-6.05,233.09,evaluated,114.0,116.0,-2.0,230.0,4.05,-3.09,2026-11-23T21:57:49Z
+401910034,2026-11-22,New York Knicks,Indiana Pacers,NYK,IND,121.88,115.45,6.43,237.34,evaluated,113.0,106.0,7.0,219.0,0.57,-18.34,2026-11-23T21:57:49Z
+401910035,2026-11-22,Golden State Warriors,Boston Celtics,GSW,BOS,113.16,122.1,-8.94,235.26,evaluated,88.0,87.0,1.0,175.0,9.94,-60.26,2026-11-23T21:57:49Z
 401910036,2026-11-23,Charlotte Hornets,Memphis Grizzlies,CHA,MEM,111.42,117.94,-6.52,229.36,pending,,,,,,,
 401910037,2026-11-23,Philadelphia 76ers,Portland Trail Blazers,PHI,POR,115.18,109.24,5.95,224.42,pending,,,,,,,
 401910038,2026-11-23,Indiana Pacers,Oklahoma City Thunder,IND,OKC,120.22,118.31,1.91,238.54,pending,,,,,,,
