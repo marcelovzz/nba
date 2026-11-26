@@ -163,8 +163,8 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909324,2026-11-25,Golden State Warriors,Sacramento Kings,GSW,SAC,117.62,113.25,4.37,230.86,evaluated,129.0,110.0,19.0,239.0,14.63,8.14,2026-11-26T17:43:30Z
 401909325,2026-11-25,Portland Trail Blazers,San Antonio Spurs,POR,SAS,113.28,113.95,-0.67,227.23,evaluated,116.0,111.0,5.0,227.0,5.67,-0.23,2026-11-26T17:43:30Z
 20261126_DET_BOS,2026-11-26,Boston Celtics,Detroit Pistons,BOS,DET,123.87,108.65,15.22,232.52,pending,,,,,,,
-20261126_NYK_MIA,2026-11-26,Miami Heat,New York Knicks,MIA,NYK,112.46,113.89,-1.43,226.35,pending,,,,,,,
+20261126_NYK_MIA,2026-11-26,Miami Heat,New York Knicks,MIA,NYK,112.05,114.51,-2.46,226.56,pending,,,,,,,
 20261126_DAL_DEN,2026-11-26,Denver Nuggets,Dallas Mavericks,DEN,DAL,120.13,116.91,3.22,237.03,pending,,,,,,,
-20261126_GSW_LAL,2026-11-26,Los Angeles Lakers,Golden State Warriors,LAL,GSW,118.13,112.06,6.07,230.19,pending,,,,,,,
-20261126_MIN_OKC,2026-11-26,Oklahoma City Thunder,Minnesota Timberwolves,OKC,MIN,117.98,113.72,4.26,231.71,pending,,,,,,,
-20261126_PHI_CLE,2026-11-26,Cleveland Cavaliers,Philadelphia 76ers,CLE,PHI,120.35,114.86,5.48,235.21,pending,,,,,,,
+20261126_GSW_LAL,2026-11-26,Los Angeles Lakers,Golden State Warriors,LAL,GSW,117.84,112.45,5.38,230.29,pending,,,,,,,
+20261126_MIN_OKC,2026-11-26,Oklahoma City Thunder,Minnesota Timberwolves,OKC,MIN,117.5,114.18,3.32,231.68,pending,,,,,,,
+20261126_PHI_CLE,2026-11-26,Cleveland Cavaliers,Philadelphia 76ers,CLE,PHI,119.73,115.3,4.43,235.03,pending,,,,,,,
