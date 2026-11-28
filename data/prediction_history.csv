@@ -179,3 +179,8 @@ game_id,date,home_team,away_team,home_abbr,away_abbr,projected_home_pts,projecte
 401909334,2026-11-27,Utah Jazz,Denver Nuggets,UTA,DEN,110.6,117.89,-7.28,228.49,pending,,,,,,,
 401909335,2026-11-27,LA Clippers,New Orleans Pelicans,LAC,NOP,114.74,107.25,7.5,221.99,pending,,,,,,,
 401909336,2026-11-27,Portland Trail Blazers,Golden State Warriors,POR,GSW,114.33,110.85,3.48,225.18,pending,,,,,,,
+401910046,2026-11-28,Washington Wizards,Orlando Magic,WAS,ORL,108.07,111.08,-3.01,219.15,pending,,,,,,,
+401910047,2026-11-28,Charlotte Hornets,Brooklyn Nets,CHA,BKN,111.24,107.59,3.64,218.83,pending,,,,,,,
+401910048,2026-11-28,Chicago Bulls,Indiana Pacers,CHI,IND,117.02,118.49,-1.47,235.51,pending,,,,,,,
+401910049,2026-11-28,Milwaukee Bucks,Oklahoma City Thunder,MIL,OKC,116.64,120.99,-4.36,237.63,pending,,,,,,,
+401910050,2026-11-28,Houston Rockets,Philadelphia 76ers,HOU,PHI,116.44,112.31,4.13,228.74,pending,,,,,,,
